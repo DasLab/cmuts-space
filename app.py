@@ -86,13 +86,17 @@ def run_pipeline(
             return None, [], "\n".join(log_lines)
 
         # Step 2: Count mutations
+        # Use relative paths so HDF5 groups match what normalize expects
+        # (e.g. "alignments/bicine-2A3" not "/tmp/.../alignments/bicine-2A3")
         log("\n=== Step 2: Counting mutations ===")
-        bam_files = sorted(glob.glob(os.path.join(outdir, "alignments", "*.bam")))
-        counts_path = os.path.join(outdir, "counts.h5")
+        bam_files = sorted(
+            os.path.relpath(p, outdir)
+            for p in glob.glob(os.path.join(outdir, "alignments", "*.bam"))
+        )
         core_cmd = [
             "cmuts", "core",
             "-f", fasta_path,
-            "-o", counts_path,
+            "-o", "counts.h5",
         ]
         if no_insertions:
             core_cmd.append("--no-insertions")
@@ -104,12 +108,10 @@ def run_pipeline(
         log("\n=== Step 3: Normalizing reactivities ===")
         profiles_path = os.path.join(outdir, "profiles.h5")
 
-        # --mod/--nomod take HDF5 group names, which mirror the BAM paths
-        # e.g. "alignments/sample" for a BAM at alignments/sample.bam
         mod_group = f"alignments/{mod_name}"
         norm_cmd = [
             "cmuts", "normalize",
-            "-o", profiles_path,
+            "-o", "profiles.h5",
             "--mod", mod_group,
             "--fasta", fasta_path,
             "--group", group_name,
@@ -126,7 +128,7 @@ def run_pipeline(
             norm_cmd.append("--clip-low")
         if clip_high:
             norm_cmd.append("--clip-high")
-        norm_cmd.append(counts_path)
+        norm_cmd.append("counts.h5")
 
         if not run(norm_cmd, cwd=outdir):
             return None, [], "\n".join(log_lines)
