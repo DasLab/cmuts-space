@@ -3,7 +3,6 @@ FROM python:3.11-slim-bookworm
 # System dependencies for cmuts-core, bowtie2, samtools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    cmake \
     pkg-config \
     git \
     wget \
@@ -19,6 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bowtie2 \
     samtools \
     && rm -rf /var/lib/apt/lists/*
+
+# Install newer cmake (Debian bookworm ships 3.25, we need 3.29+)
+RUN pip install --no-cache-dir cmake
 
 # Clone cmuts with submodules
 RUN git clone --recurse-submodules https://github.com/hmblair/cmuts.git /cmuts
