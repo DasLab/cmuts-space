@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libomp-dev \
     bowtie2 \
     samtools \
+    fontconfig \
+    fonts-urw-base35 \
     && rm -rf /var/lib/apt/lists/*
 
 # Debian bookworm ships cmake 3.25, cmuts needs 3.29+
@@ -29,6 +31,9 @@ RUN ./configure
 # Add cmuts binaries to PATH and make htscodecs libs available
 ENV PATH="/cmuts/bin:$PATH"
 RUN cp /cmuts/htscodecs/lib/*.so* /usr/local/lib/ && ldconfig
+
+# Rebuild font cache so matplotlib finds Nimbus Sans (Helvetica equivalent)
+RUN fc-cache -f && python3 -c "import matplotlib.font_manager; matplotlib.font_manager._load_fontmanager(try_read_cache=False)"
 
 # Install Gradio
 RUN pip install --no-cache-dir gradio

@@ -175,7 +175,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 value="ubr",
                 label="Normalization method",
             )
-            no_insertions = gr.Checkbox(label="Exclude insertions", value=False)
+            no_insertions = gr.Checkbox(label="Exclude insertions", value=True)
             no_deletions = gr.Checkbox(label="Exclude deletions", value=False)
             clip_low = gr.Checkbox(label="Clip negative reactivities", value=False)
             clip_high = gr.Checkbox(label="Clip reactivities above 1", value=False)
