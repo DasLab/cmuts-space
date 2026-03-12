@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     automake \
     libtool \
     zlib1g-dev \
+    libbz2-dev \
+    liblzma-dev \
     libhdf5-dev \
     libhts-dev \
     libomp-dev \
