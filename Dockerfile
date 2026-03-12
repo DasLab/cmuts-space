@@ -32,8 +32,11 @@ RUN ./configure
 ENV PATH="/cmuts/bin:$PATH"
 RUN cp /cmuts/htscodecs/lib/*.so* /usr/local/lib/ && ldconfig
 
-# Rebuild font cache so matplotlib finds Nimbus Sans (Helvetica equivalent)
-RUN fc-cache -f && python3 -c "import matplotlib.font_manager; matplotlib.font_manager._load_fontmanager(try_read_cache=False)"
+# Patch Helvetica -> Nimbus Sans L (available from fonts-urw-base35)
+RUN sed -i 's/font.family.*=.*"Helvetica"/font.family"] = "Nimbus Sans"/' \
+    /cmuts/src/python/cmuts/visualize/plotting.py && \
+    fc-cache -f && \
+    python3 -c "import matplotlib.font_manager; matplotlib.font_manager._load_fontmanager(try_read_cache=False)"
 
 # Install Gradio
 RUN pip install --no-cache-dir gradio
