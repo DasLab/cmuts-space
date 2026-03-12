@@ -24,6 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir cmake
 
 # Clone and build cmuts using its configure script
+# Cache bust: update this comment to force a fresh clone
+ARG CACHEBUST=1
 RUN git clone --recurse-submodules https://github.com/hmblair/cmuts.git /cmuts
 WORKDIR /cmuts
 RUN ./configure
