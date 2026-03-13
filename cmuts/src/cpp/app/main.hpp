@@ -1,0 +1,30 @@
+#ifndef _CMUTS_MAIN_HEADER_
+#define _CMUTS_MAIN_HEADER_
+
+#include "io/fasta.hpp"
+#include "common.hpp"
+#include "core/cmuts.hpp"
+#include "io/hdf5.hpp"
+#include "infra/mpi.hpp"
+#include "infra/utils.hpp"
+#include "generated/cmuts_args.hpp"
+
+static inline bool __mpi_build() {
+    #ifdef MPI_BUILD
+    return true;
+    #else
+    return false;
+    #endif
+}
+
+class cmutsProgram : public Program {
+public:
+    CMUTSPROGRAM_ARG_MEMBERS
+
+    cmutsProgram()
+        : Program(CMUTSPROGRAM_PROGRAM_NAME, CMUTSPROGRAM_PROGRAM_VERSION),
+          CMUTSPROGRAM_ARG_INIT
+    {}
+};
+
+#endif

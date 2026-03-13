@@ -1,0 +1,338 @@
+#!/bin/bash
+
+set -eou pipefail
+
+FASTA=""
+OUTPUT=""
+THREADS="1"
+BARCODES=""
+TRIM5=""
+TRIM3=""
+LOCAL=""
+OVERWRITE=false
+REBUILD=false
+VERBOSE=false
+FILES=()
+PAIRS=()
+
+print-usage() {
+  echo "Usage: cmuts align --fasta FASTA --output OUTPUT [FILES ...]
+Optional arguments:
+    --overwrite
+    --rebuild
+    --barcodes BARCODES
+    --trim-5 5' ADAPTER
+    --trim-3 3' ADAPTER
+    --pairs PAIRS ..."
+}
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      print-usage
+      exit 0
+      ;;
+    -v|--version)
+      echo "cmuts align v$_CMUTS_VERSION"
+      exit 0
+      ;;
+    --verbose)
+      VERBOSE=true
+      ;;
+    --fasta)
+      shift
+      FASTA="$1"
+      ;;
+    --output)
+      shift
+      OUTPUT="$1"
+      ;;
+    --overwrite)
+      OVERWRITE=true
+      ;;
+    --rebuild)
+      REBUILD=true
+      ;;
+    --threads)
+      shift
+      THREADS="$1"
+      ;;
+    --barcodes)
+      shift
+      BARCODES="$1"
+      ;;
+    --trim-5)
+      shift
+      TRIM5="$1"
+      ;;
+    --trim-3)
+      shift
+      TRIM3="$1"
+      ;;
+    --local)
+      LOCAL="--local"
+      ;;
+    --pairs)
+      shift
+      while [[ "$#" -gt 0 && ! "$1" =~ ^-- ]]; do
+        PAIRS+=("$1")
+        shift
+      done
+      continue
+      ;;
+    -*|--*)
+      echo "Unknown option $1"
+      exit 1
+      ;;
+    *)
+      FILES+=("$1")
+      ;;
+    esac
+    shift
+done
+
+handler() {
+  if [ $? -ne 130 ]; then
+    echo "Error occurred on line $1. cmuts align exited early." >&2
+  fi
+}
+
+trap 'handler $LINENO' ERR
+
+if [[ -z "$FASTA" || -z "$OUTPUT" || "${#FILES[@]}" -eq 0 ]]; then
+  print-usage
+  exit 1
+fi
+
+if [[ ${#PAIRS[@]} -gt 0 && ${#FILES[@]} -ne ${#PAIRS[@]} ]]; then
+  echo "Error: If --pairs is specified, then there must be an equal amount as the number of files specified." >&2
+  exit 1
+fi
+
+echo " -- $("$0" --version) ($(date '+%d-%m-%Y %H:%M:%S')) -- "
+echo
+
+IXDIR="index"
+TRDIR="trimmed"
+DMDIR="dmux"
+TMPDIR=".tmp"
+
+[[ "$OVERWRITE" == "true" ]] && rm -rf "$TRDIR" "$DMDIR" "$OUTPUT"
+[[ "$REBUILD" == "true" ]] && rm -rf "$IXDIR"
+
+mkdir -p "$TMPDIR" "$OUTPUT"
+
+# Trim if a sequence is provided
+
+if [[ ! -z "$TRIM5" || ! -z "$TRIM3" ]]; then
+
+  mkdir -p "$TRDIR"
+
+  for FILE in "${FILES[@]}"; do
+
+    NAME=$(basename "$FILE")
+    BASENAME="${NAME%.fastq*}"
+
+    echo
+    echo " -- Trimming $FILE --"
+    echo
+
+    # Check if both adapters are provided
+    if [[ ! -z "$TRIM5" ]] && [[ ! -z "$TRIM3" ]]; then
+        # Two-pass approach: both adapters required
+        echo "Both adapters provided - requiring both to be trimmed"
+        
+        # Pass 1: Trim 5' adapter, discard if not found
+        cutadapt \
+          --cores "$THREADS" \
+          --action=retain \
+          --discard-untrimmed \
+          -g "$TRIM5" \
+          -o "$TRDIR/${BASENAME}_temp.fastq" \
+          "$FILE"
+        
+        # Pass 2: Trim 3' adapter, discard if not found
+        cutadapt \
+          --cores "$THREADS" \
+          --action=retain \
+          --discard-untrimmed \
+          -a "$TRIM3" \
+          -o "$TRDIR/$NAME" \
+          "$TRDIR/${BASENAME}_temp.fastq"
+        
+        # Clean up temporary file
+        rm "$TRDIR/${BASENAME}_temp.fastq"
+        
+    else
+        # Original single-pass approach for when only one adapter is provided
+        FARGS=()
+        if [[ ! -z "$TRIM5"  ]]; then
+          FARGS+=("-g" "$TRIM5")
+        fi
+        if [[ ! -z "$TRIM3"  ]]; then
+          FARGS+=("-a" "$TRIM3")
+        fi
+
+        cutadapt \
+          --cores "$THREADS" \
+          --action=retain \
+          --discard-untrimmed \
+          -o "$TRDIR/$NAME" \
+          "${FARGS[@]}" \
+          "$FILE"
+    fi
+
+  done
+
+  FILES=("$TRDIR"/*.fastq*)
+
+fi
+
+# Demultiplex if a barcode file is provided
+
+if [[ ! -z "$BARCODES" ]]; then
+
+  if [[ ${#PAIRS[@]} -gt 0 ]]; then
+
+    for IX in "${!FILES[@]}"; do
+
+      FILE="${FILES[IX]}"
+      PAIR="${PAIRS[IX]}"
+
+      echo
+      echo " -- Demultiplexing $FILE and $PAIR --"
+      echo
+
+      ultraplex \
+        -i "$FILE" \
+        -i2 "$PAIR" \
+        -b "$BARCODES" \
+        -d "$DMDIR" \
+        --dont_build_reference \
+        --ignore_no_match
+
+    done
+
+  else
+
+    for FILE in "${FILES[@]}"; do
+
+      echo
+      echo " -- Demultiplexing $FILE --"
+      echo
+
+      ultraplex \
+        -i "$FILE" \
+        -b "$BARCODES" \
+        -d "$DMDIR" \
+        --dont_build_reference \
+        --ignore_no_match
+
+    done
+
+  fi
+
+  # Rename to something simpler
+
+  cd "$DMDIR"
+  for file in *.fastq.gz; do
+    mv $file ${file:20}
+  done
+  cd ..
+
+  if [[ ${#PAIRS[@]} -gt 0 ]]; then
+    FILES=("$DMDIR"/*_Fwd.fastq*)
+    PAIRS=("$DMDIR"/*_Rev.fastq*)
+  else
+    FILES=("$DMDIR"/*.fastq*)
+  fi
+
+fi
+
+# Build the index
+
+INDEX="$IXDIR/index"
+if [[ ! -e "$IXDIR" ]]; then
+
+  echo
+  echo " -- Building bowtie2 index --"
+  echo
+
+  # Convert to DNA before processing
+
+  TEMP_FASTA="${TMPDIR}/$(basename "${FASTA%.*}")-T.${FASTA##*.}"
+  sed '/^>/!s/U/T/g' "$FASTA" > "$TEMP_FASTA"
+  FASTA="$TEMP_FASTA"
+
+  mkdir "$IXDIR"
+  cmd=(bowtie2-build)
+  [[ "$VERBOSE" != "true" ]] && cmd+=(--quiet)
+  cmd+=(
+    --threads "$THREADS"
+    "$FASTA"
+    "$INDEX"
+  )
+  "${cmd[@]}"
+
+fi
+
+# Align all files
+# The awk section is to prevent read names > 252
+# (which samtools doesn't like)
+
+for IX in "${!FILES[@]}"; do
+
+  FILE="${FILES[IX]}"
+  NAME=$(basename "$FILE")
+  BASENAME="${NAME%%.*}"
+
+  if [[ ${#PAIRS[@]} -gt 0 ]]; then
+    PAIR="${PAIRS[IX]}"
+    FARGS=("-1" "$FILE" "-2" "$PAIR")
+  else
+    PAIR=""
+    if [[ "$FILE" == *.bam ]]; then
+        FARGS=("-b" "$FILE")
+    else
+        FARGS=("-U" "$FILE")
+    fi
+  fi
+
+  TMP="${TMPDIR}/${BASENAME}_UNSORTED.sam"
+  FINAL="${OUTPUT}/${BASENAME}.bam"
+
+  echo
+  echo " -- Aligning $NAME --"
+  echo
+
+  bowtie2 \
+    "${FARGS[@]}" \
+    --threads "$THREADS" \
+    --norc \
+    -x "$INDEX" \
+    --dpad 30 \
+    --maxins=1024 \
+    "$LOCAL" | \
+  awk 'BEGIN{FS=OFS="\t"} {
+    if($0 ~ /^@/) print $0
+    else {
+      if(length($1) > 250) $1 = substr($1, 1, 250)
+      print $0
+    }
+  }' > "$TMP"
+
+  echo
+  echo " -- Sorting $TMP --"
+  echo
+
+  samtools sort --threads "$THREADS" -o "$FINAL" "$TMP"
+
+  echo
+  echo " -- Sorted reads written to $FINAL --"
+  echo
+
+done
+
+# Cleanup
+
+rm -rf "$TMPDIR"
