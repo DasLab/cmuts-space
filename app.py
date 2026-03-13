@@ -10,10 +10,12 @@ import subprocess
 import tempfile
 from collections.abc import Generator
 
+print("cmuts-space: starting imports...", flush=True)
 import gradio as gr
 import h5py
 import numpy as np
 import plotly.graph_objects as go
+print("cmuts-space: imports done, building UI...", flush=True)
 
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "examples")
 MAX_FASTQ_MB = 500
@@ -458,4 +460,5 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
 
 if __name__ == "__main__":
+    print("cmuts-space: launching on 0.0.0.0:7860...", flush=True)
     demo.launch(server_name="0.0.0.0", server_port=7860)
