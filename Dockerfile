@@ -46,8 +46,9 @@ RUN pip install --no-cache-dir gradio
 # Clean up build artifacts
 RUN rm -rf /cmuts/build
 
-# Copy the app
+# Copy the app and example data
 COPY app.py /app/app.py
+COPY examples /app/examples
 WORKDIR /app
 
 EXPOSE 7860
