@@ -10,12 +10,10 @@ import subprocess
 import tempfile
 from collections.abc import Generator
 
-print("cmuts-space: starting imports...", flush=True)
 import gradio as gr
 import h5py
 import numpy as np
 import plotly.graph_objects as go
-print("cmuts-space: imports done, building UI...", flush=True)
 
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "examples")
 MAX_FASTQ_MB = 500
@@ -81,6 +79,45 @@ def _read_profiles(h5_path: str, group_name: str) -> tuple[np.ndarray, list[str]
     return reactivity, names
 
 
+def _build_stats_table(h5_path: str, group_name: str) -> str:
+    """Build a markdown summary table from the output HDF5 file."""
+    with h5py.File(h5_path, "r") as f:
+        grp = f[group_name] if group_name in f else f
+        reactivity = np.array(grp["reactivity"])
+        reads = np.array(grp["reads"])
+        error = np.array(grp["error"])
+        snr = np.array(grp["SNR"])
+
+    n_refs = reactivity.shape[0]
+    seq_len = reactivity.shape[1]
+    total_reads = int(reads.sum())
+    valid = np.isfinite(reactivity)
+
+    rows = [
+        ("References", f"{n_refs:,}"),
+        ("Reference length", f"{seq_len:,}"),
+        ("Total reads", f"{total_reads:,}"),
+        ("Mean reads per reference", f"{np.mean(reads):,.1f}"),
+        ("Median reads per reference", f"{int(np.median(reads)):,}"),
+    ]
+
+    if valid.any():
+        rows.extend([
+            ("Mean reactivity", f"{np.mean(reactivity[valid]):.3f}"),
+            ("Mean error", f"{np.mean(error[valid]):.3f}"),
+            ("Mean SNR", f"{np.mean(snr):.2f}"),
+            ("SNR > 1", f"{np.mean(snr > 1):.1%}"),
+        ])
+
+    dropout = float(np.mean(reads == 0))
+    if dropout > 0:
+        rows.append(("Dropout fraction", f"{dropout:.1%}"))
+
+    md = "| Statistic | Value |\n|-----------|-------|\n"
+    md += "\n".join(f"| {label} | {value} |" for label, value in rows)
+    return md
+
+
 def run_pipeline(
     fasta_file: str,
     mod_fastq: str,
@@ -101,12 +138,12 @@ def run_pipeline(
     empty_plot.update_layout(template="plotly_white", height=400)
 
     if fasta_file is None or mod_fastq is None:
-        yield None, empty_plot, None, "Please upload a FASTA file and at least one modified FASTQ file."
+        yield None, empty_plot, None, "", "Please upload a FASTA file and at least one modified FASTQ file."
         return
 
     for path, label in [(mod_fastq, "Modified FASTQ"), (nomod_fastq, "Control FASTQ")]:
         if path is not None and _file_size_mb(path) > MAX_FASTQ_MB:
-            yield None, empty_plot, None, (
+            yield None, empty_plot, None, "", (
                 f"{label} is {_file_size_mb(path):.0f} MB. "
                 f"The free tier has limited RAM (16 GB); files over {MAX_FASTQ_MB} MB "
                 f"may cause out-of-memory errors. Consider downsampling first."
@@ -160,7 +197,7 @@ def run_pipeline(
 
         # Step 1: Align
         log("=== Step 1: Aligning reads ===")
-        yield None, empty_plot, None, "\n".join(log_lines)
+        yield None, empty_plot, None, "", "\n".join(log_lines)
 
         fastq_files = sorted(glob.glob(os.path.join(fastq_dir, "*")))
         align_cmd = [
@@ -170,13 +207,13 @@ def run_pipeline(
             *fastq_files,
         ]
         if not run(align_cmd, cwd=outdir):
-            yield None, empty_plot, None, "\n".join(log_lines)
+            yield None, empty_plot, None, "", "\n".join(log_lines)
             return
-        yield None, empty_plot, None, "\n".join(log_lines)
+        yield None, empty_plot, None, "", "\n".join(log_lines)
 
         # Step 2: Count mutations
         log("\n=== Step 2: Counting mutations ===")
-        yield None, empty_plot, None, "\n".join(log_lines)
+        yield None, empty_plot, None, "", "\n".join(log_lines)
 
         bam_files = sorted(
             os.path.relpath(p, outdir)
@@ -191,13 +228,13 @@ def run_pipeline(
             core_cmd.append("--no-insertions")
         core_cmd.extend(bam_files)
         if not run(core_cmd, cwd=outdir):
-            yield None, empty_plot, None, "\n".join(log_lines)
+            yield None, empty_plot, None, "", "\n".join(log_lines)
             return
-        yield None, empty_plot, None, "\n".join(log_lines)
+        yield None, empty_plot, None, "", "\n".join(log_lines)
 
         # Step 3: Normalize
         log("\n=== Step 3: Normalizing reactivities ===")
-        yield None, empty_plot, None, "\n".join(log_lines)
+        yield None, empty_plot, None, "", "\n".join(log_lines)
 
         mod_group = f"alignments/{mod_name}"
         norm_cmd = [
@@ -222,7 +259,7 @@ def run_pipeline(
         norm_cmd.append("counts.h5")
 
         if not run(norm_cmd, cwd=outdir):
-            yield None, empty_plot, None, "\n".join(log_lines)
+            yield None, empty_plot, None, "", "\n".join(log_lines)
             return
 
         final_name = f"{group_name}-profiles.h5"
@@ -232,16 +269,17 @@ def run_pipeline(
         reactivity, names = _read_profiles(final_path, group_name)
         fig = _build_profile_plot(reactivity[0], names[0], names[0])
         dropdown_update = gr.Dropdown(choices=names, value=names[0], visible=len(names) > 1)
+        stats_md = _build_stats_table(final_path, group_name)
 
         log(f"\nDone. Generated {len(names)} profile(s).")
-        yield final_path, fig, dropdown_update, "\n".join(log_lines)
+        yield final_path, fig, dropdown_update, stats_md, "\n".join(log_lines)
 
     except subprocess.TimeoutExpired:
         log("Pipeline timed out (10 minute limit).")
-        yield None, empty_plot, None, "\n".join(log_lines)
+        yield None, empty_plot, None, "", "\n".join(log_lines)
     except Exception as e:
         log(f"Error: {e}")
-        yield None, empty_plot, None, "\n".join(log_lines)
+        yield None, empty_plot, None, "", "\n".join(log_lines)
 
 
 def select_profile(
@@ -315,6 +353,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         output_file = gr.File(label="Output HDF5")
         seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
         output_plot = gr.Plot(label="Reactivity Profile")
+        output_stats = gr.Markdown(label="Summary Statistics")
         output_log = gr.Textbox(label="Log", lines=15, max_lines=30)
 
         example_btn.click(
@@ -335,7 +374,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 clip_low,
                 clip_high,
             ],
-            outputs=[output_file, output_plot, seq_dropdown, output_log],
+            outputs=[output_file, output_plot, seq_dropdown, output_stats, output_log],
         )
 
         seq_dropdown.change(
@@ -460,5 +499,4 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
 
 if __name__ == "__main__":
-    print("cmuts-space: launching on 0.0.0.0:7860...", flush=True)
     demo.launch(server_name="0.0.0.0", server_port=7860)
