@@ -229,7 +229,7 @@ def run_pipeline(
 
         reactivity, names = _read_profiles(final_path, group_name)
         fig = _build_profile_plot(reactivity[0], names[0], names[0])
-        dropdown_update = gr.update(choices=names, value=names[0], visible=len(names) > 1)
+        dropdown_update = gr.Dropdown(choices=names, value=names[0], visible=len(names) > 1)
 
         log(f"\nDone. Generated {len(names)} profile(s).")
         yield final_path, fig, dropdown_update, "\n".join(log_lines)
