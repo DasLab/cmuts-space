@@ -205,56 +205,172 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         [GitHub](https://github.com/hmblair/cmuts)
         &ensp;|&ensp;
         [Documentation](https://hmblair.github.io/cmuts)
+        &ensp;|&ensp;
+        Free and open-source under the
+        [MIT License](https://github.com/hmblair/cmuts/blob/main/LICENSE)
         """
     )
 
-    with gr.Row():
-        with gr.Column():
-            fasta_input = gr.File(label="Reference FASTA", file_types=[".fasta", ".fa"])
-            mod_input = gr.File(label="Modified FASTQ (required)", file_types=[".fastq", ".fq", ".fastq.gz", ".fq.gz"])
-            nomod_input = gr.File(label="Control FASTQ (optional)", file_types=[".fastq", ".fq", ".fastq.gz", ".fq.gz"])
-            group_name = gr.Textbox(label="Group name", value="experiment", placeholder="e.g. DMS, 2A3")
-            example_btn = gr.Button("Load example data", variant="secondary", size="sm")
+    with gr.Tab("Run"):
+        with gr.Row():
+            with gr.Column():
+                fasta_input = gr.File(label="Reference FASTA", file_types=[".fasta", ".fa"])
+                mod_input = gr.File(label="Modified FASTQ (required)", file_types=[".fastq", ".fq", ".fastq.gz", ".fq.gz"])
+                nomod_input = gr.File(label="Control FASTQ (optional)", file_types=[".fastq", ".fq", ".fastq.gz", ".fq.gz"])
+                group_name = gr.Textbox(label="Group name", value="experiment", placeholder="e.g. DMS, 2A3")
+                example_btn = gr.Button("Load example data", variant="secondary", size="sm")
 
-        with gr.Column():
-            norm_method = gr.Radio(
-                choices=["ubr", "outlier", "raw"],
-                value="ubr",
-                label="Normalization method",
-            )
-            no_insertions = gr.Checkbox(label="Exclude insertions", value=True)
-            no_deletions = gr.Checkbox(label="Exclude deletions", value=False)
-            clip_low = gr.Checkbox(label="Clip negative reactivities", value=False)
-            clip_high = gr.Checkbox(label="Clip reactivities above 1", value=False)
+            with gr.Column():
+                norm_method = gr.Radio(
+                    choices=["ubr", "outlier", "raw"],
+                    value="ubr",
+                    label="Normalization method",
+                )
+                no_insertions = gr.Checkbox(label="Exclude insertions", value=True)
+                no_deletions = gr.Checkbox(label="Exclude deletions", value=False)
+                clip_low = gr.Checkbox(label="Clip negative reactivities", value=False)
+                clip_high = gr.Checkbox(label="Clip reactivities above 1", value=False)
 
-    run_btn = gr.Button("Run Pipeline", variant="primary")
+        run_btn = gr.Button("Run Pipeline", variant="primary")
 
-    with gr.Row():
-        output_file = gr.File(label="Output HDF5")
-        output_gallery = gr.Gallery(label="Figures", columns=2, height=400)
+        with gr.Row():
+            output_file = gr.File(label="Output HDF5")
+            output_gallery = gr.Gallery(label="Figures", columns=2, height=400)
 
-    output_log = gr.Textbox(label="Log", lines=15, max_lines=30)
+        output_log = gr.Textbox(label="Log", lines=15, max_lines=30)
 
-    example_btn.click(
-        fn=load_example,
-        outputs=[fasta_input, mod_input, nomod_input, group_name],
-    )
+        example_btn.click(
+            fn=load_example,
+            outputs=[fasta_input, mod_input, nomod_input, group_name],
+        )
 
-    run_btn.click(
-        fn=run_pipeline,
-        inputs=[
-            fasta_input,
-            mod_input,
-            nomod_input,
-            group_name,
-            norm_method,
-            no_insertions,
-            no_deletions,
-            clip_low,
-            clip_high,
-        ],
-        outputs=[output_file, output_gallery, output_log],
-    )
+        run_btn.click(
+            fn=run_pipeline,
+            inputs=[
+                fasta_input,
+                mod_input,
+                nomod_input,
+                group_name,
+                norm_method,
+                no_insertions,
+                no_deletions,
+                clip_low,
+                clip_high,
+            ],
+            outputs=[output_file, output_gallery, output_log],
+        )
+
+    with gr.Tab("About"):
+        gr.Markdown(
+            """
+            ## Why cmuts?
+
+            Existing tools for analyzing MaP-seq data — such as ShapeMapper2 and
+            RNAframework — were designed for single-RNA experiments and do not
+            scale to modern high-throughput libraries with thousands or millions
+            of reference sequences.
+
+            **cmuts** is a ground-up rewrite in C/C++ that addresses these
+            limitations:
+
+            - **100–200x faster** than ShapeMapper2 and RNAframework. A dataset
+              of 100 billion aligned reads across 24 million references was
+              processed in under 24 hours on 32 cores — a task that would take
+              RNAframework approximately 3 months.
+            - **Constant memory footprint** regardless of library size, thanks to
+              streamed single-pass I/O. Competing tools either grow linearly in
+              memory or require processing one reference at a time.
+            - **More accurate deletion handling.** cmuts uses a depth-first
+              search algorithm to enumerate all possible positions of ambiguous
+              deletions and weights them probabilistically using observed mutation
+              rates. Prior tools arbitrarily assign deletions to the 3'-most
+              position, which can misplace reactivity signals — particularly in
+              homopolymer regions and structurally important motifs like
+              kink-turns.
+            - **HDF5 output** for compact storage, fast random access, and direct
+              compatibility with Python and machine-learning pipelines.
+            """
+        )
+
+    with gr.Tab("Help"):
+        gr.Markdown(
+            """
+            ## Quick Start
+
+            1. Click **Load example data** on the Run tab to populate the inputs
+               with a bundled dataset (a ~615 nt RNA profiled with 2A3).
+            2. Leave the default settings and click **Run Pipeline**.
+            3. The pipeline runs three steps — alignment, mutation counting, and
+               normalization — and streams its progress to the log.
+            4. When finished, download the output HDF5 file and browse the
+               generated figures in the gallery.
+
+            ## Inputs
+
+            | Field | Description |
+            |-------|-------------|
+            | **Reference FASTA** | One or more RNA sequences in FASTA format. Each sequence is treated as a separate reference for alignment. |
+            | **Modified FASTQ** | Reads from the chemically treated condition (e.g., DMS, 2A3, SHAPE). Compressed `.fastq.gz` is accepted. |
+            | **Control FASTQ** | *(Optional)* Reads from the untreated/DMSO condition. Providing a control enables background subtraction during normalization. |
+            | **Group name** | A label for the experiment, used to name the output file and the HDF5 group. |
+
+            ## Settings
+
+            | Setting | Description |
+            |---------|-------------|
+            | **Normalization method** | `ubr` (default): unweighted benchtop reactivity normalization, suitable for most experiments. `outlier`: outlier-based normalization. `raw`: no normalization — returns raw mutation rates. |
+            | **Exclude insertions** | Do not count inserted bases as mutations (recommended for most protocols). |
+            | **Exclude deletions** | Do not count deleted bases as mutations. |
+            | **Clip negative reactivities** | Set negative normalized reactivities to zero. |
+            | **Clip reactivities above 1** | Cap normalized reactivities at 1.0. |
+
+            ## Interpreting the Output
+
+            ### HDF5 file
+
+            The output file (`<group>-profiles.h5`) contains normalized
+            per-nucleotide reactivity profiles. Open it in Python with:
+
+            ```python
+            import h5py
+
+            with h5py.File("experiment-profiles.h5") as f:
+                for name in f:
+                    reactivities = f[name][:]
+                    print(name, reactivities.shape)
+            ```
+
+            Each dataset is a 1-D array of floats, one value per nucleotide.
+            Higher values indicate more flexible (unpaired) positions; lower
+            values indicate structured (paired) regions.
+
+            ### Figures
+
+            The generated plots show the reactivity profile for each reference
+            sequence. Peaks correspond to unpaired or flexible nucleotides;
+            low/near-zero regions correspond to base-paired or otherwise
+            protected positions.
+
+            ## Limits
+
+            This server runs on Hugging Face Spaces with limited resources
+            (16 GB RAM, CPU only). FASTQ files larger than 500 MB may cause
+            out-of-memory errors. For larger datasets, install cmuts locally:
+
+            ```bash
+            pip install cmuts
+            ```
+
+            See the [full documentation](https://hmblair.github.io/cmuts) for
+            CLI usage and advanced options.
+
+            ## Privacy
+
+            All uploaded data is processed in ephemeral temporary directories
+            and deleted after the pipeline completes. No data is stored
+            persistently, and no user accounts or tracking are used.
+            """
+        )
 
 
 if __name__ == "__main__":
