@@ -23,18 +23,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Debian bookworm ships cmake 3.25, cmuts needs 3.29+
 RUN pip install --no-cache-dir cmake
 
-# Clone and build cmuts using its configure script
-# Cache bust: update this comment to force a fresh clone
-ARG CACHEBUST=1
-RUN git clone --recurse-submodules https://github.com/hmblair/cmuts.git /cmuts
+# Copy cmuts source (synced from GitHub via workflow)
+COPY cmuts /cmuts
 WORKDIR /cmuts
 RUN ./configure
 
-# Add cmuts binaries to PATH and make htscodecs libs available
+# Make htscodecs libs available
 ENV PATH="/cmuts/bin:$PATH"
 RUN cp /cmuts/htscodecs/lib/*.so* /usr/local/lib/ && ldconfig
 
-# Patch Helvetica -> Nimbus Sans L (available from fonts-urw-base35)
+# Patch Helvetica -> Nimbus Sans (available from fonts-urw-base35)
 RUN sed -i 's/font.family.*=.*"Helvetica"/font.family"] = "Nimbus Sans"/' \
     /cmuts/src/python/cmuts/visualize/plotting.py && \
     fc-cache -f && \
