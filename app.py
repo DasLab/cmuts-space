@@ -89,7 +89,7 @@ def run_pipeline(
     no_deletions: bool,
     clip_low: bool,
     clip_high: bool,
-) -> Generator[tuple[str | None, go.Figure | None, gr.update | None, str], None, None]:
+):
     """Run the full cmuts pipeline: align -> core -> normalize.
 
     Yields (output_file, plot, sequence_dropdown_update, log) so the log
