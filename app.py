@@ -354,7 +354,8 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
         output_plot = gr.Plot(label="Reactivity Profile")
         output_stats = gr.Markdown(label="Summary Statistics")
-        output_log = gr.Textbox(label="Log", lines=15, max_lines=30)
+        with gr.Accordion("Log", open=False):
+            output_log = gr.Textbox(label="Log", lines=15, max_lines=30, show_label=False)
 
         example_btn.click(
             fn=load_example,
