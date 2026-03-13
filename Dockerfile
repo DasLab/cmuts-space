@@ -41,7 +41,7 @@ RUN sed -i 's/font.family.*=.*"Helvetica"/font.family"] = "Nimbus Sans"/' \
     python3 -c "import matplotlib.font_manager; matplotlib.font_manager._load_fontmanager(try_read_cache=False)"
 
 # Install Gradio
-RUN pip install --no-cache-dir gradio
+RUN pip install --no-cache-dir gradio plotly h5py
 
 # Clean up build artifacts
 RUN rm -rf /cmuts/build

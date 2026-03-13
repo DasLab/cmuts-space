@@ -11,6 +11,9 @@ import tempfile
 from collections.abc import Generator
 
 import gradio as gr
+import h5py
+import numpy as np
+import plotly.graph_objects as go
 
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "examples")
 MAX_FASTQ_MB = 500
@@ -18,6 +21,62 @@ MAX_FASTQ_MB = 500
 
 def _file_size_mb(path: str) -> float:
     return os.path.getsize(path) / (1024 * 1024)
+
+
+def _build_profile_plot(
+    reactivity: np.ndarray,
+    sequence: str | None,
+    title: str,
+) -> go.Figure:
+    """Build an interactive Plotly bar chart for a single reactivity profile."""
+    x = np.arange(1, len(reactivity) + 1)
+    if sequence:
+        hover = [
+            f"{nt}{p}<br>Reactivity: {r:.4f}"
+            for p, r, nt in zip(x, reactivity, sequence)
+        ]
+    else:
+        hover = [f"Position {p}<br>Reactivity: {r:.4f}" for p, r in zip(x, reactivity)]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=x,
+        y=reactivity,
+        hovertext=hover,
+        hoverinfo="text",
+        marker_color="indianred",
+    ))
+    fig.update_layout(
+        title=title,
+        xaxis_title="Position",
+        yaxis_title="Reactivity",
+        template="plotly_white",
+        height=400,
+        margin=dict(l=50, r=20, t=40, b=40),
+    )
+    return fig
+
+
+def _read_profiles(h5_path: str, group_name: str) -> tuple[np.ndarray, list[str]]:
+    """Read reactivity profiles and sequence names from an HDF5 file."""
+    with h5py.File(h5_path, "r") as f:
+        grp = f[group_name] if group_name in f else f
+        reactivity = np.array(grp["reactivity"])
+        sequences = None
+        if "sequence" in f:
+            sequences = [
+                s.decode() if isinstance(s, bytes) else s for s in f["sequence"]
+            ]
+    names = []
+    for i in range(reactivity.shape[0]):
+        seq = sequences[i] if sequences and i < len(sequences) else None
+        if seq and len(seq) > 50:
+            names.append(seq[:50] + "...")
+        elif seq:
+            names.append(seq)
+        else:
+            names.append(f"Sequence {i + 1}")
+    return reactivity, names
 
 
 def run_pipeline(
@@ -30,19 +89,22 @@ def run_pipeline(
     no_deletions: bool,
     clip_low: bool,
     clip_high: bool,
-) -> Generator[tuple[str | None, list[str], str], None, None]:
+) -> Generator[tuple[str | None, go.Figure | None, gr.update | None, str], None, None]:
     """Run the full cmuts pipeline: align -> core -> normalize.
 
-    Yields intermediate results so the log updates in real time.
+    Yields (output_file, plot, sequence_dropdown_update, log) so the log
+    updates in real time and the interactive plot appears at the end.
     """
+    empty_plot = go.Figure()
+    empty_plot.update_layout(template="plotly_white", height=400)
+
     if fasta_file is None or mod_fastq is None:
-        yield None, [], "Please upload a FASTA file and at least one modified FASTQ file."
+        yield None, empty_plot, None, "Please upload a FASTA file and at least one modified FASTQ file."
         return
 
-    # File size check
     for path, label in [(mod_fastq, "Modified FASTQ"), (nomod_fastq, "Control FASTQ")]:
         if path is not None and _file_size_mb(path) > MAX_FASTQ_MB:
-            yield None, [], (
+            yield None, empty_plot, None, (
                 f"{label} is {_file_size_mb(path):.0f} MB. "
                 f"The free tier has limited RAM (16 GB); files over {MAX_FASTQ_MB} MB "
                 f"may cause out-of-memory errors. Consider downsampling first."
@@ -78,7 +140,6 @@ def run_pipeline(
         return True
 
     try:
-        # Copy inputs to workdir
         fasta_path = os.path.join(workdir, "ref.fasta")
         shutil.copy(fasta_file, fasta_path)
 
@@ -97,7 +158,7 @@ def run_pipeline(
 
         # Step 1: Align
         log("=== Step 1: Aligning reads ===")
-        yield None, [], "\n".join(log_lines)
+        yield None, empty_plot, None, "\n".join(log_lines)
 
         fastq_files = sorted(glob.glob(os.path.join(fastq_dir, "*")))
         align_cmd = [
@@ -107,13 +168,13 @@ def run_pipeline(
             *fastq_files,
         ]
         if not run(align_cmd, cwd=outdir):
-            yield None, [], "\n".join(log_lines)
+            yield None, empty_plot, None, "\n".join(log_lines)
             return
-        yield None, [], "\n".join(log_lines)
+        yield None, empty_plot, None, "\n".join(log_lines)
 
         # Step 2: Count mutations
         log("\n=== Step 2: Counting mutations ===")
-        yield None, [], "\n".join(log_lines)
+        yield None, empty_plot, None, "\n".join(log_lines)
 
         bam_files = sorted(
             os.path.relpath(p, outdir)
@@ -128,13 +189,13 @@ def run_pipeline(
             core_cmd.append("--no-insertions")
         core_cmd.extend(bam_files)
         if not run(core_cmd, cwd=outdir):
-            yield None, [], "\n".join(log_lines)
+            yield None, empty_plot, None, "\n".join(log_lines)
             return
-        yield None, [], "\n".join(log_lines)
+        yield None, empty_plot, None, "\n".join(log_lines)
 
         # Step 3: Normalize
         log("\n=== Step 3: Normalizing reactivities ===")
-        yield None, [], "\n".join(log_lines)
+        yield None, empty_plot, None, "\n".join(log_lines)
 
         mod_group = f"alignments/{mod_name}"
         norm_cmd = [
@@ -159,27 +220,43 @@ def run_pipeline(
         norm_cmd.append("counts.h5")
 
         if not run(norm_cmd, cwd=outdir):
-            yield None, [], "\n".join(log_lines)
+            yield None, empty_plot, None, "\n".join(log_lines)
             return
 
-        # Rename output file for a clean download name
         final_name = f"{group_name}-profiles.h5"
         final_path = os.path.join(outdir, final_name)
         os.rename(os.path.join(outdir, "profiles.h5"), final_path)
 
-        # Collect figures
-        fig_dir = os.path.join(outdir, "figures")
-        figures = sorted(glob.glob(os.path.join(fig_dir, "*.png"))) if os.path.isdir(fig_dir) else []
+        reactivity, names = _read_profiles(final_path, group_name)
+        fig = _build_profile_plot(reactivity[0], names[0], names[0])
+        dropdown_update = gr.update(choices=names, value=names[0], visible=len(names) > 1)
 
-        log(f"\nDone. Generated {len(figures)} figure(s).")
-        yield final_path, figures, "\n".join(log_lines)
+        log(f"\nDone. Generated {len(names)} profile(s).")
+        yield final_path, fig, dropdown_update, "\n".join(log_lines)
 
     except subprocess.TimeoutExpired:
         log("Pipeline timed out (10 minute limit).")
-        yield None, [], "\n".join(log_lines)
+        yield None, empty_plot, None, "\n".join(log_lines)
     except Exception as e:
         log(f"Error: {e}")
-        yield None, [], "\n".join(log_lines)
+        yield None, empty_plot, None, "\n".join(log_lines)
+
+
+def select_profile(
+    seq_name: str,
+    output_file: str,
+    group_name: str,
+) -> go.Figure:
+    """Switch the displayed profile when the user picks a different sequence."""
+    if not output_file or not seq_name:
+        return go.Figure()
+    group_name = group_name.strip() or "profile"
+    reactivity, names = _read_profiles(output_file, group_name)
+    try:
+        idx = names.index(seq_name)
+    except ValueError:
+        idx = 0
+    return _build_profile_plot(reactivity[idx], names[idx], names[idx])
 
 
 def load_example():
@@ -233,10 +310,9 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
         run_btn = gr.Button("Run Pipeline", variant="primary")
 
-        with gr.Row():
-            output_file = gr.File(label="Output HDF5")
-            output_gallery = gr.Gallery(label="Figures", columns=2, height=400)
-
+        output_file = gr.File(label="Output HDF5")
+        seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
+        output_plot = gr.Plot(label="Reactivity Profile")
         output_log = gr.Textbox(label="Log", lines=15, max_lines=30)
 
         example_btn.click(
@@ -257,7 +333,13 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 clip_low,
                 clip_high,
             ],
-            outputs=[output_file, output_gallery, output_log],
+            outputs=[output_file, output_plot, seq_dropdown, output_log],
+        )
+
+        seq_dropdown.change(
+            fn=select_profile,
+            inputs=[seq_dropdown, output_file, group_name],
+            outputs=[output_plot],
         )
 
     with gr.Tab("About"):
@@ -302,8 +384,9 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             2. Leave the default settings and click **Run Pipeline**.
             3. The pipeline runs three steps — alignment, mutation counting, and
                normalization — and streams its progress to the log.
-            4. When finished, download the output HDF5 file and browse the
-               generated figures in the gallery.
+            4. When finished, download the output HDF5 file and explore the
+               interactive reactivity profile. If multiple reference sequences
+               are present, use the dropdown to switch between them.
 
             ## Inputs
 
@@ -326,6 +409,14 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
             ## Interpreting the Output
 
+            ### Reactivity profile
+
+            The interactive bar chart shows per-nucleotide reactivity values.
+            Hover over any bar to see the exact position, nucleotide identity,
+            and reactivity value. Peaks correspond to unpaired or flexible
+            nucleotides; low/near-zero regions correspond to base-paired or
+            otherwise protected positions.
+
             ### HDF5 file
 
             The output file (`<group>-profiles.h5`) contains normalized
@@ -343,13 +434,6 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             Each dataset is a 1-D array of floats, one value per nucleotide.
             Higher values indicate more flexible (unpaired) positions; lower
             values indicate structured (paired) regions.
-
-            ### Figures
-
-            The generated plots show the reactivity profile for each reference
-            sequence. Peaks correspond to unpaired or flexible nucleotides;
-            low/near-zero regions correspond to base-paired or otherwise
-            protected positions.
 
             ## Limits
 
