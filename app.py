@@ -318,7 +318,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
             | Setting | Description |
             |---------|-------------|
-            | **Normalization method** | `ubr` (default): unweighted benchtop reactivity normalization, suitable for most experiments. `outlier`: outlier-based normalization. `raw`: no normalization — returns raw mutation rates. |
+            | **Normalization method** | `ubr` (default): divides by the 90th percentile of reactivities at positions with >100 reads, giving a robust upper-bound reference. `outlier`: from the top 10% of reactivities, discards the top 2% as outliers and divides by the mean of the remaining 8%. `raw`: no normalization — returns raw mutation rates. |
             | **Exclude insertions** | Do not count inserted bases as mutations (recommended for most protocols). |
             | **Exclude deletions** | Do not count deleted bases as mutations. |
             | **Clip negative reactivities** | Set negative normalized reactivities to zero. |
