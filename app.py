@@ -4,23 +4,80 @@
 from __future__ import annotations
 
 import glob
+import json
 import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Generator
+import time
+import uuid
 
 import gradio as gr
 import h5py
 import numpy as np
 import plotly.graph_objects as go
+from fastapi.responses import FileResponse, HTMLResponse
 
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "examples")
 MAX_FASTQ_MB = 500
+RESULTS_TTL_HOURS = 48
+
+# Use HF persistent storage if available, else fall back to /tmp
+RESULTS_DIR = "/data/results" if os.path.isdir("/data") else "/tmp/cmuts_results"
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
 def _file_size_mb(path: str) -> float:
     return os.path.getsize(path) / (1024 * 1024)
+
+
+def cleanup_old_results() -> None:
+    """Delete result directories older than RESULTS_TTL_HOURS."""
+    cutoff = time.time() - RESULTS_TTL_HOURS * 3600
+    if not os.path.isdir(RESULTS_DIR):
+        return
+    for entry in os.scandir(RESULTS_DIR):
+        if entry.is_dir():
+            meta_path = os.path.join(entry.path, "meta.json")
+            try:
+                if os.path.exists(meta_path):
+                    with open(meta_path) as f:
+                        created = json.load(f).get("created_at", 0)
+                else:
+                    created = entry.stat().st_mtime
+                if created < cutoff:
+                    shutil.rmtree(entry.path, ignore_errors=True)
+            except Exception:
+                pass
+
+
+def save_results(
+    h5_path: str,
+    group_name: str,
+    fig: go.Figure,
+    stats_md: str,
+    names: list[str],
+) -> str:
+    """Save pipeline results to persistent storage. Returns the job ID."""
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = os.path.join(RESULTS_DIR, job_id)
+    os.makedirs(job_dir)
+
+    shutil.copy(h5_path, os.path.join(job_dir, "profiles.h5"))
+
+    meta = {
+        "group_name": group_name,
+        "created_at": time.time(),
+        "names": names,
+        "stats_md": stats_md,
+    }
+    with open(os.path.join(job_dir, "meta.json"), "w") as f:
+        json.dump(meta, f)
+
+    with open(os.path.join(job_dir, "plot.json"), "w") as f:
+        f.write(fig.to_json())
+
+    return job_id
 
 
 def _build_profile_plot(
@@ -131,24 +188,26 @@ def run_pipeline(
 ):
     """Run the full cmuts pipeline: align -> core -> normalize.
 
-    Yields (output_file, plot, sequence_dropdown_update, log) so the log
-    updates in real time and the interactive plot appears at the end.
+    Yields (output_file, plot, sequence_dropdown_update, stats, result_url, log)
+    so the log updates in real time and the interactive plot appears at the end.
     """
     empty_plot = go.Figure()
     empty_plot.update_layout(template="plotly_white", height=400)
 
     if fasta_file is None or mod_fastq is None:
-        yield None, empty_plot, None, "", "Please upload a FASTA file and at least one modified FASTQ file."
+        yield None, empty_plot, None, "", "", "Please upload a FASTA file and at least one modified FASTQ file."
         return
 
     for path, label in [(mod_fastq, "Modified FASTQ"), (nomod_fastq, "Control FASTQ")]:
         if path is not None and _file_size_mb(path) > MAX_FASTQ_MB:
-            yield None, empty_plot, None, "", (
+            yield None, empty_plot, None, "", "", (
                 f"{label} is {_file_size_mb(path):.0f} MB. "
                 f"The free tier has limited RAM (16 GB); files over {MAX_FASTQ_MB} MB "
                 f"may cause out-of-memory errors. Consider downsampling first."
             )
             return
+
+    cleanup_old_results()
 
     workdir = tempfile.mkdtemp(prefix="cmuts_")
     outdir = os.path.join(workdir, "outputs")
@@ -197,7 +256,7 @@ def run_pipeline(
 
         # Step 1: Align
         log("=== Step 1: Aligning reads ===")
-        yield None, empty_plot, None, "", "\n".join(log_lines)
+        yield None, empty_plot, None, "", "", "\n".join(log_lines)
 
         fastq_files = sorted(glob.glob(os.path.join(fastq_dir, "*")))
         align_cmd = [
@@ -207,13 +266,13 @@ def run_pipeline(
             *fastq_files,
         ]
         if not run(align_cmd, cwd=outdir):
-            yield None, empty_plot, None, "", "\n".join(log_lines)
+            yield None, empty_plot, None, "", "", "\n".join(log_lines)
             return
-        yield None, empty_plot, None, "", "\n".join(log_lines)
+        yield None, empty_plot, None, "", "", "\n".join(log_lines)
 
         # Step 2: Count mutations
         log("\n=== Step 2: Counting mutations ===")
-        yield None, empty_plot, None, "", "\n".join(log_lines)
+        yield None, empty_plot, None, "", "", "\n".join(log_lines)
 
         bam_files = sorted(
             os.path.relpath(p, outdir)
@@ -228,13 +287,13 @@ def run_pipeline(
             core_cmd.append("--no-insertions")
         core_cmd.extend(bam_files)
         if not run(core_cmd, cwd=outdir):
-            yield None, empty_plot, None, "", "\n".join(log_lines)
+            yield None, empty_plot, None, "", "", "\n".join(log_lines)
             return
-        yield None, empty_plot, None, "", "\n".join(log_lines)
+        yield None, empty_plot, None, "", "", "\n".join(log_lines)
 
         # Step 3: Normalize
         log("\n=== Step 3: Normalizing reactivities ===")
-        yield None, empty_plot, None, "", "\n".join(log_lines)
+        yield None, empty_plot, None, "", "", "\n".join(log_lines)
 
         mod_group = f"alignments/{mod_name}"
         norm_cmd = [
@@ -259,7 +318,7 @@ def run_pipeline(
         norm_cmd.append("counts.h5")
 
         if not run(norm_cmd, cwd=outdir):
-            yield None, empty_plot, None, "", "\n".join(log_lines)
+            yield None, empty_plot, None, "", "", "\n".join(log_lines)
             return
 
         final_name = f"{group_name}-profiles.h5"
@@ -271,15 +330,20 @@ def run_pipeline(
         dropdown_update = gr.Dropdown(choices=names, value=names[0], visible=len(names) > 1)
         stats_md = _build_stats_table(final_path, group_name)
 
+        # Save results for persistent access
+        job_id = save_results(final_path, group_name, fig, stats_md, names)
+        result_url = f"/results/{job_id}"
+
         log(f"\nDone. Generated {len(names)} profile(s).")
-        yield final_path, fig, dropdown_update, stats_md, "\n".join(log_lines)
+        log(f"Results available at: {result_url} (expires in {RESULTS_TTL_HOURS}h)")
+        yield final_path, fig, dropdown_update, stats_md, result_url, "\n".join(log_lines)
 
     except subprocess.TimeoutExpired:
         log("Pipeline timed out (10 minute limit).")
-        yield None, empty_plot, None, "", "\n".join(log_lines)
+        yield None, empty_plot, None, "", "", "\n".join(log_lines)
     except Exception as e:
         log(f"Error: {e}")
-        yield None, empty_plot, None, "", "\n".join(log_lines)
+        yield None, empty_plot, None, "", "", "\n".join(log_lines)
 
 
 def select_profile(
@@ -308,6 +372,92 @@ def load_example():
         "example",
     )
 
+
+def load_saved_result(job_id: str):
+    """Load a previously saved result by job ID."""
+    job_id = job_id.strip()
+    if not job_id:
+        return go.Figure(), None, "", ""
+
+    job_dir = os.path.join(RESULTS_DIR, job_id)
+    meta_path = os.path.join(job_dir, "meta.json")
+    h5_path = os.path.join(job_dir, "profiles.h5")
+    plot_path = os.path.join(job_dir, "plot.json")
+
+    if not os.path.isdir(job_dir):
+        return go.Figure(), None, "", "Result not found. It may have expired (results are kept for 48 hours)."
+
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    with open(plot_path) as f:
+        fig = go.Figure(json.load(f))
+
+    names = meta.get("names", [])
+    dropdown_update = gr.Dropdown(choices=names, value=names[0] if names else None, visible=len(names) > 1)
+
+    return fig, dropdown_update, meta.get("stats_md", ""), ""
+
+
+# ---------- Results page HTML template ----------
+
+RESULTS_PAGE_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>cmuts results — {job_id}</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+               max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #333; }}
+        h1 {{ font-size: 1.5rem; }}
+        h1 a {{ color: inherit; text-decoration: none; }}
+        .meta {{ color: #666; margin-bottom: 1.5rem; }}
+        table {{ border-collapse: collapse; margin: 1.5rem 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 0.5rem 1rem; text-align: left; }}
+        th {{ background: #f5f5f5; }}
+        .download {{ display: inline-block; margin: 1rem 0; padding: 0.5rem 1.5rem;
+                     background: #4a90d9; color: white; text-decoration: none;
+                     border-radius: 4px; }}
+        .download:hover {{ background: #357abd; }}
+        .expiry {{ color: #999; font-size: 0.85rem; margin-top: 2rem; }}
+    </style>
+</head>
+<body>
+    <h1><a href="/">cmuts</a> — Results</h1>
+    <p class="meta">Job ID: <code>{job_id}</code></p>
+
+    <div id="plot"></div>
+    <script>
+        var plotData = {plot_json};
+        Plotly.newPlot('plot', plotData.data, plotData.layout, {{responsive: true}});
+    </script>
+
+    {stats_html}
+
+    <a class="download" href="/results/{job_id}/download">Download HDF5 file</a>
+
+    <p class="expiry">Results are stored for {ttl} hours and will be automatically deleted after that.</p>
+</body>
+</html>"""
+
+
+def _md_table_to_html(md: str) -> str:
+    """Convert a simple markdown table to HTML."""
+    lines = [l.strip() for l in md.strip().split("\n") if l.strip() and not l.strip().startswith("|---")]
+    if not lines:
+        return ""
+    html = "<table>\n"
+    for i, line in enumerate(lines):
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        tag = "th" if i == 0 else "td"
+        html += "  <tr>" + "".join(f"<{tag}>{c}</{tag}>" for c in cells) + "</tr>\n"
+    html += "</table>"
+    return html
+
+
+# ---------- Gradio UI ----------
 
 with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
     gr.Markdown(
@@ -351,11 +501,18 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         run_btn = gr.Button("Run Pipeline", variant="primary")
 
         output_file = gr.File(label="Output HDF5")
+        result_url = gr.Textbox(label="Result link (bookmark this — expires in 48h)", interactive=False)
         seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
         output_plot = gr.Plot(label="Reactivity Profile")
         output_stats = gr.Markdown(label="Summary Statistics")
         with gr.Accordion("Log", open=False):
             output_log = gr.Textbox(label="Log", lines=15, max_lines=30, show_label=False)
+
+        with gr.Accordion("Load previous results", open=False):
+            with gr.Row():
+                prev_job_id = gr.Textbox(label="Job ID", placeholder="e.g. a3f2b1c4d5e6", scale=3)
+                load_btn = gr.Button("Load", variant="secondary", scale=1)
+            load_status = gr.Textbox(label="Status", interactive=False, visible=False)
 
         example_btn.click(
             fn=load_example,
@@ -375,13 +532,19 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 clip_low,
                 clip_high,
             ],
-            outputs=[output_file, output_plot, seq_dropdown, output_stats, output_log],
+            outputs=[output_file, output_plot, seq_dropdown, output_stats, result_url, output_log],
         )
 
         seq_dropdown.change(
             fn=select_profile,
             inputs=[seq_dropdown, output_file, group_name],
             outputs=[output_plot],
+        )
+
+        load_btn.click(
+            fn=load_saved_result,
+            inputs=[prev_job_id],
+            outputs=[output_plot, seq_dropdown, output_stats, load_status],
         )
 
     with gr.Tab("About"):
@@ -477,6 +640,17 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             Higher values indicate more flexible (unpaired) positions; lower
             values indicate structured (paired) regions.
 
+            ### Result link
+
+            After the pipeline completes, a **result link** is displayed that
+            you can bookmark or share. The link opens a standalone page with
+            the interactive plot, summary statistics, and a download button
+            for the HDF5 file. Results are stored for **48 hours** and
+            automatically deleted after that.
+
+            To reload previous results within the app, expand
+            **Load previous results** on the Run tab and enter the job ID.
+
             ## Limits
 
             This server runs on Hugging Face Spaces with limited resources
@@ -492,12 +666,75 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
             ## Privacy
 
-            All uploaded data is processed in ephemeral temporary directories
-            and deleted after the pipeline completes. No data is stored
-            persistently, and no user accounts or tracking are used.
+            All uploaded data is processed in ephemeral temporary directories.
+            Pipeline results (reactivity profiles, plots, and summary
+            statistics) are stored for **48 hours** to provide bookmarkable
+            result links, then automatically deleted. No user accounts,
+            tracking, or cookies are used.
             """
         )
 
 
+# ---------- FastAPI app with custom routes + mounted Gradio ----------
+
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/results/{job_id}", response_class=HTMLResponse)
+async def results_page(job_id: str):
+    job_dir = os.path.join(RESULTS_DIR, job_id)
+    if not os.path.isdir(job_dir):
+        return HTMLResponse(
+            "<h1>Result not found</h1><p>This result may have expired. "
+            "Results are kept for 48 hours.</p>"
+            '<p><a href="/">Return to cmuts</a></p>',
+            status_code=404,
+        )
+
+    with open(os.path.join(job_dir, "meta.json")) as f:
+        meta = json.load(f)
+    with open(os.path.join(job_dir, "plot.json")) as f:
+        plot_json = f.read()
+
+    stats_html = _md_table_to_html(meta.get("stats_md", ""))
+
+    html = RESULTS_PAGE_TEMPLATE.format(
+        job_id=job_id,
+        plot_json=plot_json,
+        stats_html=stats_html,
+        ttl=RESULTS_TTL_HOURS,
+    )
+    return HTMLResponse(html)
+
+
+@app.get("/results/{job_id}/download")
+async def results_download(job_id: str):
+    h5_path = os.path.join(RESULTS_DIR, job_id, "profiles.h5")
+    if not os.path.isfile(h5_path):
+        return HTMLResponse(
+            "<h1>File not found</h1><p>This result may have expired.</p>",
+            status_code=404,
+        )
+
+    with open(os.path.join(RESULTS_DIR, job_id, "meta.json")) as f:
+        meta = json.load(f)
+    group_name = meta.get("group_name", "profiles")
+
+    return FileResponse(
+        h5_path,
+        media_type="application/x-hdf5",
+        filename=f"{group_name}-profiles.h5",
+    )
+
+
+# Mount Gradio onto the FastAPI app
+app = gr.mount_gradio_app(app, demo, path="")
+
+# Run cleanup on startup
+cleanup_old_results()
+
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=7860)
