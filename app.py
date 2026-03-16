@@ -314,8 +314,10 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
         for j, mod in enumerate(_HEATMAP_MODS):
             val = heatmap[i, j]
             prob = f"{val:.4e}" if val > 0 else "0"
-            if mod in ("A", "C", "G", "U"):
-                row.append(f"{nt} → {mod}<br>Probability: {prob}")
+            if mod in ("A", "C", "G", "U") and mod == nt:
+                row.append(f"Match ({nt})<br>Probability: {prob}")
+            elif mod in ("A", "C", "G", "U"):
+                row.append(f"Mismatch {nt} → {mod}<br>Probability: {prob}")
             elif mod == "del":
                 row.append(f"Deletion of {nt}<br>Probability: {prob}")
             elif mod == "ins":
