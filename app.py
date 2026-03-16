@@ -320,6 +320,7 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
         title="Modification Heatmap",
         xaxis_title="Modification Type",
         yaxis_title="Reference Nucleotide",
+        yaxis=dict(autorange="reversed"),
         template="plotly_white",
         height=300,
         margin=dict(l=50, r=20, t=40, b=40),
