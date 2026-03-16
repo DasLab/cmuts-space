@@ -230,7 +230,7 @@ def run_pipeline(
     outdir = os.path.join(workdir, "outputs")
     os.makedirs(outdir)
 
-    group_name = group_name.strip() or "profile"
+    group_name = (group_name or "").strip() or "profile"
     log_lines: list[str] = []
 
     def log(msg: str) -> None:
@@ -281,9 +281,9 @@ def run_pipeline(
             "--fasta", fasta_path,
             "--output", os.path.join(outdir, "alignments"),
         ]
-        if trim_5.strip():
+        if trim_5 and trim_5.strip():
             align_cmd.extend(["--trim-5", trim_5.strip()])
-        if trim_3.strip():
+        if trim_3 and trim_3.strip():
             align_cmd.extend(["--trim-3", trim_3.strip()])
         if local_align:
             align_cmd.append("--local")
@@ -382,7 +382,9 @@ def run_pipeline(
         log("Pipeline timed out (10 minute limit).")
         yield None, empty_plot, None, "", "", "\n".join(log_lines)
     except Exception as e:
+        import traceback
         log(f"Error: {e}")
+        log(traceback.format_exc())
         yield None, empty_plot, None, "", "", "\n".join(log_lines)
 
 
@@ -394,7 +396,7 @@ def select_profile(
     """Switch the displayed profile when the user picks a different sequence."""
     if not output_file or not seq_name:
         return go.Figure()
-    group_name = group_name.strip() or "profile"
+    group_name = (group_name or "").strip() or "profile"
     reactivity, names = _read_profiles(output_file, group_name)
     try:
         idx = names.index(seq_name)
@@ -415,7 +417,7 @@ def load_example():
 
 def load_saved_result(job_id: str):
     """Load a previously saved result by job ID."""
-    job_id = job_id.strip()
+    job_id = (job_id or "").strip()
     if not job_id:
         return go.Figure(), None, "", ""
 
