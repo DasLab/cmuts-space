@@ -334,8 +334,6 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
         colorscale="RdPu",
         zmin=-4,
         zmax=0,
-        xgap=1,
-        ygap=1,
         text=hover_text,
         hoverinfo="text",
         colorbar=dict(
@@ -367,6 +365,7 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
         yaxis=dict(
             autorange="reversed",
             showgrid=False, zeroline=False,
+            ticklabelstandoff=10,
             scaleanchor="x",
             constrain="domain",
         ),
