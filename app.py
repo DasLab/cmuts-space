@@ -519,15 +519,20 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
     )
 
     with gr.Tab("Run"):
+        gr.Markdown("### Input data")
         with gr.Row():
             with gr.Column():
                 fasta_input = gr.File(label="Reference FASTA", file_types=[".fasta", ".fa"])
+            with gr.Column():
                 mod_input = gr.File(label="Modified FASTQ (required)", file_types=[".fastq", ".fq", ".gz"])
+            with gr.Column():
                 nomod_input = gr.File(label="Control FASTQ (optional)", file_types=[".fastq", ".fq", ".gz"])
-                group_name = gr.Textbox(label="Group name", value="experiment", placeholder="e.g. DMS, 2A3")
-                example_btn = gr.Button("Load example data", variant="secondary", size="sm")
+        with gr.Row():
+            group_name = gr.Textbox(label="Group name", value="experiment", placeholder="e.g. DMS, 2A3", scale=3)
+            example_btn = gr.Button("Load example data", variant="secondary", size="sm", scale=1)
 
-        with gr.Accordion("Alignment options", open=False):
+        gr.Markdown("### Options")
+        with gr.Accordion("Alignment", open=False):
             with gr.Row():
                 trim_5 = gr.Textbox(label="5' adapter to trim", placeholder="e.g. AGATCGGAAGAG")
                 trim_3 = gr.Textbox(label="3' adapter to trim", placeholder="e.g. AGATCGGAAGAG")
@@ -566,6 +571,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
         run_btn = gr.Button("Run Pipeline", variant="primary")
 
+        gr.Markdown("### Results")
         output_file = gr.File(label="Output HDF5")
         result_url = gr.Textbox(label="Result link (bookmark this — expires in 48h)", interactive=False)
         seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
