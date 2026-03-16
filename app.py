@@ -349,9 +349,12 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
         yaxis_title="Reference Nucleotide",
         yaxis=dict(autorange="reversed"),
         template="plotly_white",
-        height=350,
+        # Fixed dimensions to get square cells: 4 rows x 7 cols.
+        # Plot area = height - margins_tb, width - margins_lr - colorbar.
+        # Cell size ~55px: 4*55=220 plot height, 7*55=385 plot width.
+        height=300,
+        width=550,
         margin=dict(l=50, r=20, t=40, b=40),
-        autosize=True,
     )
     return fig
 
