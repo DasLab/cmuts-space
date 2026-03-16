@@ -206,7 +206,7 @@ def _check_output_h5(path: str, step: str) -> None:
 # --- HDF5 reading and plotting ---
 
 
-def _build_profile_plot(
+def _build_single_profile_plot(
     reactivity: np.ndarray,
     sequence: str | None,
     title: str,
@@ -235,6 +235,93 @@ def _build_profile_plot(
         yaxis_title="Reactivity",
         template="plotly_white",
         height=400,
+        margin=dict(l=50, r=20, t=40, b=40),
+    )
+    return fig
+
+
+def _build_reactivity_heatmap(
+    reactivity: np.ndarray,
+    names: list[str],
+) -> go.Figure:
+    """Build an interactive heatmap of reactivity across sequences and positions.
+
+    Used when there are multiple reference sequences (matching cmuts behavior:
+    single sequence -> line plot, multiple -> heatmap).
+    """
+    # Cap at 250 sequences to keep the plot responsive
+    n_display = min(reactivity.shape[0], 250)
+    data = reactivity[:n_display]
+    display_names = names[:n_display]
+
+    fig = go.Figure()
+    fig.add_trace(go.Heatmap(
+        z=data,
+        x=np.arange(1, data.shape[1] + 1),
+        y=display_names,
+        colorscale="RdPu",
+        zmin=0,
+        zmax=1,
+        colorbar=dict(title="Reactivity"),
+        hovertemplate="Position %{x}<br>%{y}<br>Reactivity: %{z:.4f}<extra></extra>",
+    ))
+    title = "Reactivity Profiles"
+    if n_display < reactivity.shape[0]:
+        title += f" (showing {n_display} of {reactivity.shape[0]})"
+    fig.update_layout(
+        title=title,
+        xaxis_title="Position",
+        yaxis_title="Sequence",
+        template="plotly_white",
+        height=max(400, min(50 * n_display, 800)),
+        margin=dict(l=50, r=20, t=40, b=40),
+    )
+    return fig
+
+
+def _build_reactivity_plot(
+    reactivity: np.ndarray,
+    names: list[str],
+) -> go.Figure:
+    """Build the main reactivity plot: line plot for 1 sequence, heatmap for many."""
+    if reactivity.shape[0] == 1:
+        return _build_single_profile_plot(reactivity[0], names[0], names[0])
+    return _build_reactivity_heatmap(reactivity, names)
+
+
+_HEATMAP_NTS = ["A", "C", "G", "U"]
+_HEATMAP_MODS = ["A", "C", "G", "U", "del", "ins", "term"]
+
+
+def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
+    """Build the 4x7 modification heatmap from the output HDF5 file.
+
+    Returns None if the heatmap dataset is not present.
+    """
+    with h5py.File(h5_path, "r") as f:
+        grp = f[group_name] if group_name in f else f
+        if "heatmap" not in grp:
+            return None
+        heatmap = np.array(grp["heatmap"])
+
+    # Clamp zeros for log display
+    heatmap_display = np.where(heatmap > 0, heatmap, np.nan)
+
+    fig = go.Figure()
+    fig.add_trace(go.Heatmap(
+        z=heatmap_display,
+        x=_HEATMAP_MODS,
+        y=_HEATMAP_NTS,
+        colorscale="RdPu",
+        hovertemplate="%{y} → %{x}<br>Probability: %{z:.4e}<extra></extra>",
+        colorbar=dict(title="Probability"),
+    ))
+    fig.update_layout(
+        title="Modification Heatmap",
+        xaxis_title="Modification Type",
+        yaxis_title="Reference Nucleotide",
+        template="plotly_white",
+        height=300,
         margin=dict(l=50, r=20, t=40, b=40),
     )
     return fig
@@ -373,18 +460,19 @@ def run_pipeline(
 ):
     """Run the full cmuts pipeline: align -> core -> normalize.
 
-    Yields (output_file, plot, sequence_dropdown_update, stats, result_url, log)
-    so the log updates in real time and the interactive plot appears at the end.
+    Yields (output_file, plot, sequence_dropdown_update, stats, result_url,
+            mod_heatmap, log)
+    so the log updates in real time and the interactive plots appear at the end.
     """
     empty = _empty_plot()
 
     if fasta_file is None or mod_fastq is None:
-        yield None, empty, None, "", "", "Please upload a FASTA file and at least one modified FASTQ file."
+        yield None, empty, None, "", "", None, "Please upload a FASTA file and at least one modified FASTQ file."
         return
 
     for path, label in [(mod_fastq, "Modified FASTQ"), (nomod_fastq, "Control FASTQ")]:
         if path is not None and _file_size_mb(path) > MAX_FASTQ_MB:
-            yield None, empty, None, "", "", (
+            yield None, empty, None, "", "", None, (
                 f"{label} is {_file_size_mb(path):.0f} MB. "
                 f"The free tier has limited RAM (16 GB); files over {MAX_FASTQ_MB} MB "
                 f"may cause out-of-memory errors. Consider downsampling first."
@@ -440,33 +528,33 @@ def run_pipeline(
 
         # Step 1: Align
         log("=== Step 1: Aligning reads ===")
-        yield None, empty, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", None, "\n".join(log_lines)
 
         fastq_files = sorted(glob.glob(os.path.join(fastq_dir, "*")))
         alignments_dir = os.path.join(outdir, "alignments")
         align_cmd = _build_align_cmd(fasta_path, alignments_dir, fastq_files, align_cfg)
         if not run(align_cmd, cwd=outdir):
-            yield None, empty, None, "", "", "\n".join(log_lines)
+            yield None, empty, None, "", "", None, "\n".join(log_lines)
             return
-        yield None, empty, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", None, "\n".join(log_lines)
 
         # Step 2: Count mutations
         log("\n=== Step 2: Counting mutations ===")
-        yield None, empty, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", None, "\n".join(log_lines)
 
         bam_abs = _check_bam_files(alignments_dir)
         bam_files = sorted(os.path.relpath(p, outdir) for p in bam_abs)
         counts_h5 = "counts.h5"
         core_cmd = _build_core_cmd(fasta_path, counts_h5, bam_files, core_cfg)
         if not run(core_cmd, cwd=outdir):
-            yield None, empty, None, "", "", "\n".join(log_lines)
+            yield None, empty, None, "", "", None, "\n".join(log_lines)
             return
         _check_output_h5(os.path.join(outdir, counts_h5), "cmuts core")
-        yield None, empty, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", None, "\n".join(log_lines)
 
         # Step 3: Normalize
         log("\n=== Step 3: Normalizing reactivities ===")
-        yield None, empty, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", None, "\n".join(log_lines)
 
         mod_group = f"alignments/{mod_name}"
         nomod_group = f"alignments/{nomod_name}" if nomod_name else None
@@ -476,7 +564,7 @@ def run_pipeline(
             mod_group, group_name, nomod_group, norm_cfg,
         )
         if not run(norm_cmd, cwd=outdir):
-            yield None, empty, None, "", "", "\n".join(log_lines)
+            yield None, empty, None, "", "", None, "\n".join(log_lines)
             return
 
         profiles_path = os.path.join(outdir, profiles_h5)
@@ -487,9 +575,14 @@ def run_pipeline(
         os.rename(profiles_path, final_path)
 
         reactivity, names = _read_profiles(final_path, group_name)
-        fig = _build_profile_plot(reactivity[0], names[0], names[0])
-        dropdown_update = gr.Dropdown(choices=names, value=names[0], visible=len(names) > 1)
+        fig = _build_reactivity_plot(reactivity, names)
+        # Only show the sequence dropdown for the single-sequence line plot
+        dropdown_update = gr.Dropdown(
+            choices=names, value=names[0],
+            visible=(reactivity.shape[0] > 1),
+        )
         stats_md = _build_stats_table(final_path, group_name)
+        mod_heatmap = _build_mod_heatmap(final_path, group_name)
 
         job_id = save_results(final_path, group_name, fig, stats_md, names)
         space_host = os.environ.get("SPACE_HOST", "")
@@ -498,15 +591,15 @@ def run_pipeline(
 
         log(f"\nDone. Generated {len(names)} profile(s).")
         log(f"Results available at: {result_url} (expires in {RESULTS_TTL_HOURS}h)")
-        yield final_path, fig, dropdown_update, stats_md, result_url, "\n".join(log_lines)
+        yield final_path, fig, dropdown_update, stats_md, result_url, mod_heatmap, "\n".join(log_lines)
 
     except subprocess.TimeoutExpired:
         log(f"Pipeline timed out ({PIPELINE_TIMEOUT_SEC // 60} minute limit).")
-        yield None, empty, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", None, "\n".join(log_lines)
     except Exception as e:
         log(f"Error: {e}")
         log(traceback.format_exc())
-        yield None, empty, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", None, "\n".join(log_lines)
 
 
 # --- Gradio callbacks ---
@@ -586,7 +679,7 @@ def select_profile(
         idx = names.index(seq_name)
     except ValueError:
         idx = 0
-    return _build_profile_plot(reactivity[idx], names[idx], names[idx])
+    return _build_single_profile_plot(reactivity[idx], names[idx], names[idx])
 
 
 def load_example():
@@ -767,6 +860,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         )
         seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
         output_plot = gr.Plot(label="Reactivity Profile")
+        mod_heatmap_plot = gr.Plot(label="Modification Heatmap", visible=True)
         output_stats = gr.Markdown(label="Summary Statistics")
         with gr.Accordion("Log", open=False):
             output_log = gr.Textbox(label="Log", lines=15, max_lines=30, show_label=False)
@@ -812,7 +906,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 norm_cutoff,
                 norm_percentile,
             ],
-            outputs=[output_file, output_plot, seq_dropdown, output_stats, result_url, output_log],
+            outputs=[output_file, output_plot, seq_dropdown, output_stats, result_url, mod_heatmap_plot, output_log],
         )
 
         seq_dropdown.change(
