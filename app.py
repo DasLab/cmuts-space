@@ -332,7 +332,9 @@ def run_pipeline(
 
         # Save results for persistent access
         job_id = save_results(final_path, group_name, fig, stats_md, names)
-        result_url = f"/results/{job_id}"
+        space_host = os.environ.get("SPACE_HOST", "")
+        base = f"https://{space_host}" if space_host else ""
+        result_url = f"{base}/results/{job_id}"
 
         log(f"\nDone. Generated {len(names)} profile(s).")
         log(f"Results available at: {result_url} (expires in {RESULTS_TTL_HOURS}h)")
