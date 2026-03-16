@@ -19,6 +19,7 @@ import gradio as gr
 import h5py
 import numpy as np
 import plotly.graph_objects as go
+from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse
 
 
@@ -1067,7 +1068,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             ## Quick Start
 
             1. Click **Load example data** on the Run tab to populate the inputs
-               with a bundled dataset (a ~615 nt RNA profiled with 2A3).
+               with a bundled dataset.
             2. Leave the default settings and click **Run Pipeline**.
             3. The pipeline runs three steps — alignment, mutation counting, and
                normalization — and streams its progress to the log.
@@ -1135,9 +1136,9 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
             ## Limits
 
-            This server runs on Hugging Face Spaces with limited resources
-            (16 GB RAM, CPU only). FASTQ files larger than 500 MB may cause
-            out-of-memory errors. For larger datasets, install cmuts locally:
+            This server has limited resources (16 GB RAM, CPU only). Very
+            large FASTQ files may cause out-of-memory errors. For larger
+            datasets, install cmuts locally:
 
             ```bash
             pip install cmuts
@@ -1158,8 +1159,6 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
 
 # --- FastAPI routes ---
-
-from fastapi import FastAPI
 
 app = FastAPI()
 
