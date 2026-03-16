@@ -527,17 +527,6 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 group_name = gr.Textbox(label="Group name", value="experiment", placeholder="e.g. DMS, 2A3")
                 example_btn = gr.Button("Load example data", variant="secondary", size="sm")
 
-            with gr.Column():
-                norm_method = gr.Radio(
-                    choices=["ubr", "outlier", "raw"],
-                    value="ubr",
-                    label="Normalization method",
-                )
-                no_insertions = gr.Checkbox(label="Exclude insertions", value=True)
-                no_deletions = gr.Checkbox(label="Exclude deletions", value=False)
-                clip_low = gr.Checkbox(label="Clip negative reactivities", value=False)
-                clip_high = gr.Checkbox(label="Clip reactivities above 1", value=False)
-
         with gr.Accordion("Alignment options", open=False):
             with gr.Row():
                 trim_5 = gr.Textbox(label="5' adapter to trim", placeholder="e.g. AGATCGGAAGAG")
@@ -555,7 +544,18 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 no_mismatches = gr.Checkbox(label="Exclude mismatches", value=False)
                 strand = gr.Radio(choices=["both", "forward", "reverse"], value="both", label="Strand")
 
-        with gr.Accordion("Normalization options", open=False):
+        with gr.Accordion("Normalization", open=False):
+            norm_method = gr.Radio(
+                choices=["ubr", "outlier", "raw"],
+                value="ubr",
+                label="Normalization method",
+            )
+            with gr.Row():
+                no_insertions = gr.Checkbox(label="Exclude insertions", value=True)
+                no_deletions = gr.Checkbox(label="Exclude deletions", value=False)
+            with gr.Row():
+                clip_low = gr.Checkbox(label="Clip negative reactivities", value=False)
+                clip_high = gr.Checkbox(label="Clip reactivities above 1", value=False)
             with gr.Row():
                 blank_5p = gr.Number(value=0, label="Blank 5' bases", precision=0)
                 blank_3p = gr.Number(value=0, label="Blank 3' bases", precision=0)
