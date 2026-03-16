@@ -499,6 +499,15 @@ def _empty_plot() -> go.Figure:
     return fig
 
 
+_EMPTY = _empty_plot()
+
+
+def _progress_yield(result_url: str, log_lines: list[str]) -> tuple:
+    """Build the in-progress yield tuple. Single source of truth for the
+    yield shape: (file, plot, dropdown, stats, url, mod_heatmap, log)."""
+    return (None, _EMPTY, None, None, result_url, None, "\n".join(log_lines))
+
+
 def run_pipeline(
     fasta_file: str,
     mod_fastq: str,
@@ -514,8 +523,6 @@ def run_pipeline(
             mod_heatmap, log)
     so the log updates in real time and the interactive plots appear at the end.
     """
-    empty = _empty_plot()
-
     if fasta_file is None or mod_fastq is None:
         raise gr.Error("Please upload a FASTA file and at least one modified FASTQ file.")
 
@@ -583,33 +590,33 @@ def run_pipeline(
 
         # Step 1: Align
         log("=== Step 1: Aligning reads ===")
-        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
+        yield _progress_yield(result_url, log_lines)
 
         fastq_files = sorted(glob.glob(os.path.join(fastq_dir, "*")))
         alignments_dir = os.path.join(outdir, "alignments")
         align_cmd = _build_align_cmd(fasta_path, alignments_dir, fastq_files, align_cfg)
         if not run(align_cmd, cwd=outdir):
-            yield None, empty, None, None, result_url, None, "\n".join(log_lines)
+            yield _progress_yield(result_url, log_lines)
             return
-        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
+        yield _progress_yield(result_url, log_lines)
 
         # Step 2: Count mutations
         log("\n=== Step 2: Counting mutations ===")
-        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
+        yield _progress_yield(result_url, log_lines)
 
         bam_abs = _check_bam_files(alignments_dir)
         bam_files = sorted(os.path.relpath(p, outdir) for p in bam_abs)
         counts_h5 = "counts.h5"
         core_cmd = _build_core_cmd(fasta_path, counts_h5, bam_files, core_cfg)
         if not run(core_cmd, cwd=outdir):
-            yield None, empty, None, None, result_url, None, "\n".join(log_lines)
+            yield _progress_yield(result_url, log_lines)
             return
         _check_output_h5(os.path.join(outdir, counts_h5), "cmuts core")
-        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
+        yield _progress_yield(result_url, log_lines)
 
         # Step 3: Normalize
         log("\n=== Step 3: Normalizing reactivities ===")
-        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
+        yield _progress_yield(result_url, log_lines)
 
         mod_group = f"alignments/{mod_name}"
         nomod_group = f"alignments/{nomod_name}" if nomod_name else None
@@ -619,7 +626,7 @@ def run_pipeline(
             mod_group, group_name, nomod_group, norm_cfg,
         )
         if not run(norm_cmd, cwd=outdir):
-            yield None, empty, None, None, result_url, None, "\n".join(log_lines)
+            yield _progress_yield(result_url, log_lines)
             return
 
         profiles_path = os.path.join(outdir, profiles_h5)
@@ -647,11 +654,11 @@ def run_pipeline(
 
     except subprocess.TimeoutExpired:
         log(f"Pipeline timed out ({PIPELINE_TIMEOUT_SEC // 60} minute limit).")
-        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
+        yield _progress_yield(result_url, log_lines)
     except Exception as e:
         log(f"Error: {e}")
         log(traceback.format_exc())
-        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
+        yield _progress_yield(result_url, log_lines)
 
 
 # --- Gradio callbacks ---
