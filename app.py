@@ -185,6 +185,23 @@ def run_pipeline(
     no_deletions: bool,
     clip_low: bool,
     clip_high: bool,
+    # Alignment options
+    trim_5: str,
+    trim_3: str,
+    local_align: bool,
+    # Read filtering
+    min_mapq: int,
+    min_phred: int,
+    min_length: int,
+    max_length: int,
+    no_mismatches: bool,
+    strand: str,
+    # Normalization
+    blank_5p: int,
+    blank_3p: int,
+    blank_cutoff: int,
+    norm_cutoff: int,
+    norm_percentile: int,
 ):
     """Run the full cmuts pipeline: align -> core -> normalize.
 
@@ -263,8 +280,14 @@ def run_pipeline(
             "cmuts", "align",
             "--fasta", fasta_path,
             "--output", os.path.join(outdir, "alignments"),
-            *fastq_files,
         ]
+        if trim_5.strip():
+            align_cmd.extend(["--trim-5", trim_5.strip()])
+        if trim_3.strip():
+            align_cmd.extend(["--trim-3", trim_3.strip()])
+        if local_align:
+            align_cmd.append("--local")
+        align_cmd.extend(fastq_files)
         if not run(align_cmd, cwd=outdir):
             yield None, empty_plot, None, "", "", "\n".join(log_lines)
             return
@@ -282,9 +305,19 @@ def run_pipeline(
             "cmuts", "core",
             "-f", fasta_path,
             "-o", "counts.h5",
+            "--min-mapq", str(min_mapq),
+            "--min-phred", str(min_phred),
+            "--min-length", str(min_length),
+            "--max-length", str(max_length),
         ]
         if no_insertions:
             core_cmd.append("--no-insertions")
+        if no_mismatches:
+            core_cmd.append("--no-mismatches")
+        if strand == "forward":
+            core_cmd.append("--no-reverse")
+        elif strand == "reverse":
+            core_cmd.append("--only-reverse")
         core_cmd.extend(bam_files)
         if not run(core_cmd, cwd=outdir):
             yield None, empty_plot, None, "", "", "\n".join(log_lines)
@@ -303,6 +336,11 @@ def run_pipeline(
             "--fasta", fasta_path,
             "--group", group_name,
             "--norm", norm_method,
+            "--blank-5p", str(blank_5p),
+            "--blank-3p", str(blank_3p),
+            "--blank-cutoff", str(blank_cutoff),
+            "--norm-cutoff", str(norm_cutoff),
+            "--norm-percentile", str(norm_percentile),
         ]
         if nomod_name:
             nomod_group = f"alignments/{nomod_name}"
@@ -500,6 +538,32 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 clip_low = gr.Checkbox(label="Clip negative reactivities", value=False)
                 clip_high = gr.Checkbox(label="Clip reactivities above 1", value=False)
 
+        with gr.Accordion("Alignment options", open=False):
+            with gr.Row():
+                trim_5 = gr.Textbox(label="5' adapter to trim", placeholder="e.g. AGATCGGAAGAG")
+                trim_3 = gr.Textbox(label="3' adapter to trim", placeholder="e.g. AGATCGGAAGAG")
+                local_align = gr.Checkbox(label="Local alignment", value=False)
+
+        with gr.Accordion("Read filtering", open=False):
+            with gr.Row():
+                min_mapq = gr.Slider(minimum=0, maximum=60, step=1, value=10, label="Min mapping quality")
+                min_phred = gr.Slider(minimum=0, maximum=40, step=1, value=10, label="Min PHRED score")
+            with gr.Row():
+                min_length = gr.Number(value=2, label="Min read length", precision=0)
+                max_length = gr.Number(value=1024, label="Max read length", precision=0)
+            with gr.Row():
+                no_mismatches = gr.Checkbox(label="Exclude mismatches", value=False)
+                strand = gr.Radio(choices=["both", "forward", "reverse"], value="both", label="Strand")
+
+        with gr.Accordion("Normalization options", open=False):
+            with gr.Row():
+                blank_5p = gr.Number(value=0, label="Blank 5' bases", precision=0)
+                blank_3p = gr.Number(value=0, label="Blank 3' bases", precision=0)
+                blank_cutoff = gr.Number(value=10, label="Min reads for position", precision=0)
+            with gr.Row():
+                norm_cutoff = gr.Number(value=500, label="Min reads for normalization", precision=0)
+                norm_percentile = gr.Slider(minimum=50, maximum=100, step=1, value=90, label="Normalization percentile")
+
         run_btn = gr.Button("Run Pipeline", variant="primary")
 
         output_file = gr.File(label="Output HDF5")
@@ -533,6 +597,23 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 no_deletions,
                 clip_low,
                 clip_high,
+                # Alignment options
+                trim_5,
+                trim_3,
+                local_align,
+                # Read filtering
+                min_mapq,
+                min_phred,
+                min_length,
+                max_length,
+                no_mismatches,
+                strand,
+                # Normalization
+                blank_5p,
+                blank_3p,
+                blank_cutoff,
+                norm_cutoff,
+                norm_percentile,
             ],
             outputs=[output_file, output_plot, seq_dropdown, output_stats, result_url, output_log],
         )
