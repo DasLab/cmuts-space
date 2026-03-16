@@ -733,7 +733,7 @@ def load_example():
     return (
         os.path.join(EXAMPLES_DIR, "ref.fasta"),
         os.path.join(EXAMPLES_DIR, "treated.fastq.gz"),
-        os.path.join(EXAMPLES_DIR, "untreated.fastq.gz"),
+        None,
         "example",
     )
 
