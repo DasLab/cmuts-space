@@ -6,11 +6,14 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import time
+import traceback
 import uuid
+from dataclasses import dataclass
 
 import gradio as gr
 import h5py
@@ -18,66 +21,189 @@ import numpy as np
 import plotly.graph_objects as go
 from fastapi.responses import FileResponse, HTMLResponse
 
+
+# --- Constants and paths ---
+
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "examples")
 MAX_FASTQ_MB = 500
 RESULTS_TTL_HOURS = 48
+DEFAULT_GROUP_NAME = "profile"
+PIPELINE_TIMEOUT_SEC = 600
 
-# Use HF persistent storage if available, else fall back to /tmp
 RESULTS_DIR = "/data/results" if os.path.isdir("/data") else "/tmp/cmuts_results"
 os.makedirs(RESULTS_DIR, exist_ok=True)
+
+_FASTQ_SUFFIXES = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
+
+
+# --- Dataclasses ---
+
+
+@dataclass
+class AlignConfig:
+    trim_5: str = ""
+    trim_3: str = ""
+    local_align: bool = False
+
+
+@dataclass
+class CoreConfig:
+    min_mapq: int = 10
+    min_phred: int = 10
+    min_length: int = 2
+    max_length: int = 1024
+    no_insertions: bool = True
+    no_mismatches: bool = False
+    strand: str = "both"
+
+
+@dataclass
+class NormConfig:
+    norm_method: str = "ubr"
+    no_insertions: bool = True
+    no_deletions: bool = False
+    clip_low: bool = False
+    clip_high: bool = False
+    blank_5p: int = 0
+    blank_3p: int = 0
+    blank_cutoff: int = 10
+    norm_cutoff: int = 500
+    norm_percentile: int = 90
+
+
+# --- Input validation ---
+
+
+def _sanitize_group_name(raw: str | None) -> str:
+    """Normalize a user-supplied group name to a safe HDF5 path component."""
+    name = re.sub(r"[^\w\-]", "_", (raw or "").strip())
+    return name or DEFAULT_GROUP_NAME
+
+
+def _fastq_stem(path: str) -> str:
+    """Return the sample name from a FASTQ path by stripping known extensions.
+
+    Handles multi-dot filenames like 'sample.rep1.fastq.gz' correctly.
+    """
+    name = os.path.basename(path)
+    for suffix in _FASTQ_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return os.path.splitext(name)[0]
 
 
 def _file_size_mb(path: str) -> float:
     return os.path.getsize(path) / (1024 * 1024)
 
 
-def cleanup_old_results() -> None:
-    """Delete result directories older than RESULTS_TTL_HOURS."""
-    cutoff = time.time() - RESULTS_TTL_HOURS * 3600
-    if not os.path.isdir(RESULTS_DIR):
-        return
-    for entry in os.scandir(RESULTS_DIR):
-        if entry.is_dir():
-            meta_path = os.path.join(entry.path, "meta.json")
-            try:
-                if os.path.exists(meta_path):
-                    with open(meta_path) as f:
-                        created = json.load(f).get("created_at", 0)
-                else:
-                    created = entry.stat().st_mtime
-                if created < cutoff:
-                    shutil.rmtree(entry.path, ignore_errors=True)
-            except Exception:
-                pass
+# --- CLI command builders ---
 
 
-def save_results(
-    h5_path: str,
+def _build_align_cmd(
+    fasta_path: str,
+    output_dir: str,
+    fastq_files: list[str],
+    cfg: AlignConfig,
+) -> list[str]:
+    cmd = ["cmuts", "align", "--fasta", fasta_path, "--output", output_dir]
+    if cfg.trim_5.strip():
+        cmd.extend(["--trim-5", cfg.trim_5.strip()])
+    if cfg.trim_3.strip():
+        cmd.extend(["--trim-3", cfg.trim_3.strip()])
+    if cfg.local_align:
+        cmd.append("--local")
+    cmd.extend(fastq_files)
+    return cmd
+
+
+def _build_core_cmd(
+    fasta_path: str,
+    output_h5: str,
+    bam_files: list[str],
+    cfg: CoreConfig,
+) -> list[str]:
+    cmd = [
+        "cmuts", "core",
+        "-f", fasta_path,
+        "-o", output_h5,
+        "--min-mapq", str(cfg.min_mapq),
+        "--min-phred", str(cfg.min_phred),
+        "--min-length", str(cfg.min_length),
+        "--max-length", str(cfg.max_length),
+    ]
+    if cfg.no_insertions:
+        cmd.append("--no-insertions")
+    if cfg.no_mismatches:
+        cmd.append("--no-mismatches")
+    if cfg.strand == "forward":
+        cmd.append("--no-reverse")
+    elif cfg.strand == "reverse":
+        cmd.append("--only-reverse")
+    cmd.extend(bam_files)
+    return cmd
+
+
+def _build_normalize_cmd(
+    input_h5: str,
+    output_h5: str,
+    fasta_path: str,
+    mod_group: str,
     group_name: str,
-    fig: go.Figure,
-    stats_md: str,
-    names: list[str],
-) -> str:
-    """Save pipeline results to persistent storage. Returns the job ID."""
-    job_id = uuid.uuid4().hex[:12]
-    job_dir = os.path.join(RESULTS_DIR, job_id)
-    os.makedirs(job_dir)
+    nomod_group: str | None,
+    cfg: NormConfig,
+) -> list[str]:
+    cmd = [
+        "cmuts", "normalize",
+        "-o", output_h5,
+        "--mod", mod_group,
+        "--fasta", fasta_path,
+        "--group", group_name,
+        "--norm", cfg.norm_method,
+        "--blank-5p", str(cfg.blank_5p),
+        "--blank-3p", str(cfg.blank_3p),
+        "--blank-cutoff", str(cfg.blank_cutoff),
+        "--norm-cutoff", str(cfg.norm_cutoff),
+        "--norm-percentile", str(cfg.norm_percentile),
+    ]
+    if nomod_group:
+        cmd.extend(["--nomod", nomod_group])
+    if cfg.no_insertions:
+        cmd.append("--no-insertions")
+    if cfg.no_deletions:
+        cmd.append("--no-deletions")
+    if cfg.clip_low:
+        cmd.append("--clip-low")
+    if cfg.clip_high:
+        cmd.append("--clip-high")
+    cmd.append(input_h5)
+    return cmd
 
-    shutil.copy(h5_path, os.path.join(job_dir, "profiles.h5"))
 
-    meta = {
-        "group_name": group_name,
-        "created_at": time.time(),
-        "names": names,
-        "stats_md": stats_md,
-    }
-    with open(os.path.join(job_dir, "meta.json"), "w") as f:
-        json.dump(meta, f)
+# --- Intermediate checks ---
 
-    with open(os.path.join(job_dir, "plot.json"), "w") as f:
-        f.write(fig.to_json())
 
-    return job_id
+def _check_bam_files(alignments_dir: str) -> list[str]:
+    """Return sorted relative BAM paths, or raise if none found."""
+    bam_files = sorted(glob.glob(os.path.join(alignments_dir, "*.bam")))
+    if not bam_files:
+        raise RuntimeError(
+            f"Alignment produced no BAM files in {alignments_dir}. "
+            "Check the log for bowtie2 errors — the reference FASTA may not "
+            "match the reads, or the FASTQ may be empty."
+        )
+    return bam_files
+
+
+def _check_output_h5(path: str, step: str) -> None:
+    """Raise if an expected HDF5 output file is missing."""
+    if not os.path.isfile(path):
+        raise RuntimeError(
+            f"{step} did not produce output file: {os.path.basename(path)}. "
+            "Check the log for errors."
+        )
+
+
+# --- HDF5 reading and plotting ---
 
 
 def _build_profile_plot(
@@ -175,49 +301,90 @@ def _build_stats_table(h5_path: str, group_name: str) -> str:
     return md
 
 
+# --- Results persistence ---
+
+
+def cleanup_old_results() -> None:
+    """Delete result directories older than RESULTS_TTL_HOURS."""
+    cutoff = time.time() - RESULTS_TTL_HOURS * 3600
+    if not os.path.isdir(RESULTS_DIR):
+        return
+    for entry in os.scandir(RESULTS_DIR):
+        if entry.is_dir():
+            meta_path = os.path.join(entry.path, "meta.json")
+            try:
+                if os.path.exists(meta_path):
+                    with open(meta_path) as f:
+                        created = json.load(f).get("created_at", 0)
+                else:
+                    created = entry.stat().st_mtime
+                if created < cutoff:
+                    shutil.rmtree(entry.path, ignore_errors=True)
+            except Exception:
+                pass
+
+
+def save_results(
+    h5_path: str,
+    group_name: str,
+    fig: go.Figure,
+    stats_md: str,
+    names: list[str],
+) -> str:
+    """Save pipeline results to persistent storage. Returns the job ID."""
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = os.path.join(RESULTS_DIR, job_id)
+    os.makedirs(job_dir)
+
+    shutil.copy(h5_path, os.path.join(job_dir, "profiles.h5"))
+
+    meta = {
+        "group_name": group_name,
+        "created_at": time.time(),
+        "names": names,
+        "stats_md": stats_md,
+    }
+    with open(os.path.join(job_dir, "meta.json"), "w") as f:
+        json.dump(meta, f)
+
+    with open(os.path.join(job_dir, "plot.json"), "w") as f:
+        f.write(fig.to_json())
+
+    return job_id
+
+
+# --- Pipeline orchestration ---
+
+
+def _empty_plot() -> go.Figure:
+    fig = go.Figure()
+    fig.update_layout(template="plotly_white", height=400)
+    return fig
+
+
 def run_pipeline(
     fasta_file: str,
     mod_fastq: str,
     nomod_fastq: str | None,
     group_name: str,
-    norm_method: str,
-    no_insertions: bool,
-    no_deletions: bool,
-    clip_low: bool,
-    clip_high: bool,
-    # Alignment options
-    trim_5: str,
-    trim_3: str,
-    local_align: bool,
-    # Read filtering
-    min_mapq: int,
-    min_phred: int,
-    min_length: int,
-    max_length: int,
-    no_mismatches: bool,
-    strand: str,
-    # Normalization
-    blank_5p: int,
-    blank_3p: int,
-    blank_cutoff: int,
-    norm_cutoff: int,
-    norm_percentile: int,
+    align_cfg: AlignConfig,
+    core_cfg: CoreConfig,
+    norm_cfg: NormConfig,
 ):
     """Run the full cmuts pipeline: align -> core -> normalize.
 
     Yields (output_file, plot, sequence_dropdown_update, stats, result_url, log)
     so the log updates in real time and the interactive plot appears at the end.
     """
-    empty_plot = go.Figure()
-    empty_plot.update_layout(template="plotly_white", height=400)
+    empty = _empty_plot()
 
     if fasta_file is None or mod_fastq is None:
-        yield None, empty_plot, None, "", "", "Please upload a FASTA file and at least one modified FASTQ file."
+        yield None, empty, None, "", "", "Please upload a FASTA file and at least one modified FASTQ file."
         return
 
     for path, label in [(mod_fastq, "Modified FASTQ"), (nomod_fastq, "Control FASTQ")]:
         if path is not None and _file_size_mb(path) > MAX_FASTQ_MB:
-            yield None, empty_plot, None, "", "", (
+            yield None, empty, None, "", "", (
                 f"{label} is {_file_size_mb(path):.0f} MB. "
                 f"The free tier has limited RAM (16 GB); files over {MAX_FASTQ_MB} MB "
                 f"may cause out-of-memory errors. Consider downsampling first."
@@ -230,7 +397,7 @@ def run_pipeline(
     outdir = os.path.join(workdir, "outputs")
     os.makedirs(outdir)
 
-    group_name = (group_name or "").strip() or "profile"
+    group_name = _sanitize_group_name(group_name)
     log_lines: list[str] = []
 
     def log(msg: str) -> None:
@@ -243,7 +410,7 @@ def run_pipeline(
             cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=PIPELINE_TIMEOUT_SEC,
         )
         if result.stdout:
             log(result.stdout.rstrip())
@@ -262,113 +429,68 @@ def run_pipeline(
         os.makedirs(fastq_dir)
 
         mod_basename = os.path.basename(mod_fastq)
-        mod_name = mod_basename.split(".")[0]
+        mod_name = _fastq_stem(mod_fastq)
         shutil.copy(mod_fastq, os.path.join(fastq_dir, mod_basename))
 
         nomod_name = None
         if nomod_fastq is not None:
             nomod_basename = os.path.basename(nomod_fastq)
-            nomod_name = nomod_basename.split(".")[0]
+            nomod_name = _fastq_stem(nomod_fastq)
             shutil.copy(nomod_fastq, os.path.join(fastq_dir, nomod_basename))
 
         # Step 1: Align
         log("=== Step 1: Aligning reads ===")
-        yield None, empty_plot, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", "\n".join(log_lines)
 
         fastq_files = sorted(glob.glob(os.path.join(fastq_dir, "*")))
-        align_cmd = [
-            "cmuts", "align",
-            "--fasta", fasta_path,
-            "--output", os.path.join(outdir, "alignments"),
-        ]
-        if trim_5 and trim_5.strip():
-            align_cmd.extend(["--trim-5", trim_5.strip()])
-        if trim_3 and trim_3.strip():
-            align_cmd.extend(["--trim-3", trim_3.strip()])
-        if local_align:
-            align_cmd.append("--local")
-        align_cmd.extend(fastq_files)
+        alignments_dir = os.path.join(outdir, "alignments")
+        align_cmd = _build_align_cmd(fasta_path, alignments_dir, fastq_files, align_cfg)
         if not run(align_cmd, cwd=outdir):
-            yield None, empty_plot, None, "", "", "\n".join(log_lines)
+            yield None, empty, None, "", "", "\n".join(log_lines)
             return
-        yield None, empty_plot, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", "\n".join(log_lines)
 
         # Step 2: Count mutations
         log("\n=== Step 2: Counting mutations ===")
-        yield None, empty_plot, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", "\n".join(log_lines)
 
-        bam_files = sorted(
-            os.path.relpath(p, outdir)
-            for p in glob.glob(os.path.join(outdir, "alignments", "*.bam"))
-        )
-        core_cmd = [
-            "cmuts", "core",
-            "-f", fasta_path,
-            "-o", "counts.h5",
-            "--min-mapq", str(min_mapq),
-            "--min-phred", str(min_phred),
-            "--min-length", str(min_length),
-            "--max-length", str(max_length),
-        ]
-        if no_insertions:
-            core_cmd.append("--no-insertions")
-        if no_mismatches:
-            core_cmd.append("--no-mismatches")
-        if strand == "forward":
-            core_cmd.append("--no-reverse")
-        elif strand == "reverse":
-            core_cmd.append("--only-reverse")
-        core_cmd.extend(bam_files)
+        bam_abs = _check_bam_files(alignments_dir)
+        bam_files = sorted(os.path.relpath(p, outdir) for p in bam_abs)
+        counts_h5 = "counts.h5"
+        core_cmd = _build_core_cmd(fasta_path, counts_h5, bam_files, core_cfg)
         if not run(core_cmd, cwd=outdir):
-            yield None, empty_plot, None, "", "", "\n".join(log_lines)
+            yield None, empty, None, "", "", "\n".join(log_lines)
             return
-        yield None, empty_plot, None, "", "", "\n".join(log_lines)
+        _check_output_h5(os.path.join(outdir, counts_h5), "cmuts core")
+        yield None, empty, None, "", "", "\n".join(log_lines)
 
         # Step 3: Normalize
         log("\n=== Step 3: Normalizing reactivities ===")
-        yield None, empty_plot, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", "\n".join(log_lines)
 
         mod_group = f"alignments/{mod_name}"
-        norm_cmd = [
-            "cmuts", "normalize",
-            "-o", "profiles.h5",
-            "--mod", mod_group,
-            "--fasta", fasta_path,
-            "--group", group_name,
-            "--norm", norm_method,
-            "--blank-5p", str(blank_5p),
-            "--blank-3p", str(blank_3p),
-            "--blank-cutoff", str(blank_cutoff),
-            "--norm-cutoff", str(norm_cutoff),
-            "--norm-percentile", str(norm_percentile),
-        ]
-        if nomod_name:
-            nomod_group = f"alignments/{nomod_name}"
-            norm_cmd.extend(["--nomod", nomod_group])
-        if no_insertions:
-            norm_cmd.append("--no-insertions")
-        if no_deletions:
-            norm_cmd.append("--no-deletions")
-        if clip_low:
-            norm_cmd.append("--clip-low")
-        if clip_high:
-            norm_cmd.append("--clip-high")
-        norm_cmd.append("counts.h5")
-
+        nomod_group = f"alignments/{nomod_name}" if nomod_name else None
+        profiles_h5 = "profiles.h5"
+        norm_cmd = _build_normalize_cmd(
+            counts_h5, profiles_h5, fasta_path,
+            mod_group, group_name, nomod_group, norm_cfg,
+        )
         if not run(norm_cmd, cwd=outdir):
-            yield None, empty_plot, None, "", "", "\n".join(log_lines)
+            yield None, empty, None, "", "", "\n".join(log_lines)
             return
+
+        profiles_path = os.path.join(outdir, profiles_h5)
+        _check_output_h5(profiles_path, "cmuts normalize")
 
         final_name = f"{group_name}-profiles.h5"
         final_path = os.path.join(outdir, final_name)
-        os.rename(os.path.join(outdir, "profiles.h5"), final_path)
+        os.rename(profiles_path, final_path)
 
         reactivity, names = _read_profiles(final_path, group_name)
         fig = _build_profile_plot(reactivity[0], names[0], names[0])
         dropdown_update = gr.Dropdown(choices=names, value=names[0], visible=len(names) > 1)
         stats_md = _build_stats_table(final_path, group_name)
 
-        # Save results for persistent access
         job_id = save_results(final_path, group_name, fig, stats_md, names)
         space_host = os.environ.get("SPACE_HOST", "")
         base = f"https://{space_host}" if space_host else ""
@@ -379,13 +501,75 @@ def run_pipeline(
         yield final_path, fig, dropdown_update, stats_md, result_url, "\n".join(log_lines)
 
     except subprocess.TimeoutExpired:
-        log("Pipeline timed out (10 minute limit).")
-        yield None, empty_plot, None, "", "", "\n".join(log_lines)
+        log(f"Pipeline timed out ({PIPELINE_TIMEOUT_SEC // 60} minute limit).")
+        yield None, empty, None, "", "", "\n".join(log_lines)
     except Exception as e:
-        import traceback
         log(f"Error: {e}")
         log(traceback.format_exc())
-        yield None, empty_plot, None, "", "", "\n".join(log_lines)
+        yield None, empty, None, "", "", "\n".join(log_lines)
+
+
+# --- Gradio callbacks ---
+
+
+def _run_pipeline_gradio(
+    fasta_file: str,
+    mod_fastq: str,
+    nomod_fastq: str | None,
+    group_name: str,
+    norm_method: str,
+    no_insertions: bool,
+    no_deletions: bool,
+    clip_low: bool,
+    clip_high: bool,
+    trim_5: str,
+    trim_3: str,
+    local_align: bool,
+    min_mapq: int,
+    min_phred: int,
+    min_length: int,
+    max_length: int,
+    no_mismatches: bool,
+    strand: str,
+    blank_5p: int,
+    blank_3p: int,
+    blank_cutoff: int,
+    norm_cutoff: int,
+    norm_percentile: int,
+):
+    """Gradio-facing wrapper: packs flat args into dataclasses."""
+    yield from run_pipeline(
+        fasta_file=fasta_file,
+        mod_fastq=mod_fastq,
+        nomod_fastq=nomod_fastq,
+        group_name=group_name,
+        align_cfg=AlignConfig(
+            trim_5=trim_5 or "",
+            trim_3=trim_3 or "",
+            local_align=local_align,
+        ),
+        core_cfg=CoreConfig(
+            min_mapq=int(min_mapq or 10),
+            min_phred=int(min_phred or 10),
+            min_length=int(min_length or 2),
+            max_length=int(max_length or 1024),
+            no_insertions=no_insertions,
+            no_mismatches=no_mismatches,
+            strand=strand or "both",
+        ),
+        norm_cfg=NormConfig(
+            norm_method=norm_method or "ubr",
+            no_insertions=no_insertions,
+            no_deletions=no_deletions,
+            clip_low=clip_low,
+            clip_high=clip_high,
+            blank_5p=int(blank_5p or 0),
+            blank_3p=int(blank_3p or 0),
+            blank_cutoff=int(blank_cutoff or 10),
+            norm_cutoff=int(norm_cutoff or 500),
+            norm_percentile=int(norm_percentile or 90),
+        ),
+    )
 
 
 def select_profile(
@@ -396,7 +580,7 @@ def select_profile(
     """Switch the displayed profile when the user picks a different sequence."""
     if not output_file or not seq_name:
         return go.Figure()
-    group_name = (group_name or "").strip() or "profile"
+    group_name = _sanitize_group_name(group_name)
     reactivity, names = _read_profiles(output_file, group_name)
     try:
         idx = names.index(seq_name)
@@ -423,11 +607,13 @@ def load_saved_result(job_id: str):
 
     job_dir = os.path.join(RESULTS_DIR, job_id)
     meta_path = os.path.join(job_dir, "meta.json")
-    h5_path = os.path.join(job_dir, "profiles.h5")
     plot_path = os.path.join(job_dir, "plot.json")
 
     if not os.path.isdir(job_dir):
-        return go.Figure(), None, "", "Result not found. It may have expired (results are kept for 48 hours)."
+        return go.Figure(), None, "", (
+            f"Result not found. It may have expired "
+            f"(results are kept for {RESULTS_TTL_HOURS} hours)."
+        )
 
     with open(meta_path) as f:
         meta = json.load(f)
@@ -441,7 +627,7 @@ def load_saved_result(job_id: str):
     return fig, dropdown_update, meta.get("stats_md", ""), ""
 
 
-# ---------- Results page HTML template ----------
+# --- Results page HTML template ---
 
 RESULTS_PAGE_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -499,7 +685,7 @@ def _md_table_to_html(md: str) -> str:
     return html
 
 
-# ---------- Gradio UI ----------
+# --- Gradio UI ---
 
 with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
     gr.Markdown(
@@ -575,7 +761,10 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
         gr.Markdown("### Results")
         output_file = gr.File(label="Output HDF5")
-        result_url = gr.Textbox(label="Result link (bookmark this — expires in 48h)", interactive=False)
+        result_url = gr.Textbox(
+            label=f"Result link (bookmark this — expires in {RESULTS_TTL_HOURS}h)",
+            interactive=False,
+        )
         seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
         output_plot = gr.Plot(label="Reactivity Profile")
         output_stats = gr.Markdown(label="Summary Statistics")
@@ -594,7 +783,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         )
 
         run_btn.click(
-            fn=run_pipeline,
+            fn=_run_pipeline_gradio,
             inputs=[
                 fasta_input,
                 mod_input,
@@ -766,7 +955,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         )
 
 
-# ---------- FastAPI app with custom routes + mounted Gradio ----------
+# --- FastAPI routes ---
 
 from fastapi import FastAPI
 
@@ -779,7 +968,7 @@ async def results_page(job_id: str):
     if not os.path.isdir(job_dir):
         return HTMLResponse(
             "<h1>Result not found</h1><p>This result may have expired. "
-            "Results are kept for 48 hours.</p>"
+            f"Results are kept for {RESULTS_TTL_HOURS} hours.</p>"
             '<p><a href="/">Return to cmuts</a></p>',
             status_code=404,
         )
