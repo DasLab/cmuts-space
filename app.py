@@ -307,6 +307,23 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
     # Log-transform to match cmuts normalize (LogNorm vmin=1e-4, vmax=1e0)
     heatmap_log = np.where(heatmap > 0, np.log10(heatmap), np.nan)
 
+    # Build hover text with descriptive labels
+    hover_text = []
+    for i, nt in enumerate(_HEATMAP_NTS):
+        row = []
+        for j, mod in enumerate(_HEATMAP_MODS):
+            val = heatmap[i, j]
+            prob = f"{val:.4e}" if val > 0 else "0"
+            if mod in ("A", "C", "G", "U"):
+                row.append(f"{nt} → {mod}<br>Probability: {prob}")
+            elif mod == "del":
+                row.append(f"Deletion of {nt}<br>Probability: {prob}")
+            elif mod == "ins":
+                row.append(f"Insertion at {nt}<br>Probability: {prob}")
+            else:
+                row.append(f"Termination at {nt}<br>Probability: {prob}")
+        hover_text.append(row)
+
     fig = go.Figure()
     fig.add_trace(go.Heatmap(
         z=heatmap_log,
@@ -315,8 +332,8 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
         colorscale="RdPu",
         zmin=-4,
         zmax=0,
-        customdata=np.where(heatmap > 0, heatmap, np.nan),
-        hovertemplate="%{y} → %{x}<br>Probability: %{customdata:.4e}<extra></extra>",
+        text=hover_text,
+        hoverinfo="text",
         colorbar=dict(
             title="Probability",
             tickvals=[-4, -3, -2, -1, 0],
