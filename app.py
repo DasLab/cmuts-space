@@ -304,17 +304,24 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
             return None
         heatmap = np.array(grp["heatmap"])
 
-    # Clamp zeros for log display
-    heatmap_display = np.where(heatmap > 0, heatmap, np.nan)
+    # Log-transform to match cmuts normalize (LogNorm vmin=1e-4, vmax=1e0)
+    heatmap_log = np.where(heatmap > 0, np.log10(heatmap), np.nan)
 
     fig = go.Figure()
     fig.add_trace(go.Heatmap(
-        z=heatmap_display,
+        z=heatmap_log,
         x=_HEATMAP_MODS,
         y=_HEATMAP_NTS,
         colorscale="RdPu",
-        hovertemplate="%{y} → %{x}<br>Probability: %{z:.4e}<extra></extra>",
-        colorbar=dict(title="Probability"),
+        zmin=-4,
+        zmax=0,
+        customdata=np.where(heatmap > 0, heatmap, np.nan),
+        hovertemplate="%{y} → %{x}<br>Probability: %{customdata:.4e}<extra></extra>",
+        colorbar=dict(
+            title="Probability",
+            tickvals=[-4, -3, -2, -1, 0],
+            ticktext=["10⁻⁴", "10⁻³", "10⁻²", "10⁻¹", "10⁰"],
+        ),
     ))
     fig.update_layout(
         title="Modification Heatmap",
