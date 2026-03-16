@@ -20,7 +20,7 @@ import h5py
 import numpy as np
 import plotly.graph_objects as go
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 
 # --- Constants and paths ---
@@ -470,6 +470,7 @@ def save_results(
     stats_rows: list[list[str]],
     names: list[str],
     job_id: str | None = None,
+    mod_heatmap: go.Figure | None = None,
 ) -> str:
     """Save pipeline results to persistent storage. Returns the job ID."""
     if job_id is None:
@@ -491,6 +492,10 @@ def save_results(
     with open(os.path.join(job_dir, "plot.json"), "w") as f:
         f.write(fig.to_json())
 
+    if mod_heatmap is not None:
+        with open(os.path.join(job_dir, "mod_heatmap.json"), "w") as f:
+            f.write(mod_heatmap.to_json())
+
     return job_id
 
 
@@ -503,13 +508,12 @@ def _empty_plot() -> go.Figure:
     return fig
 
 
-_EMPTY = _empty_plot()
 
 
 def _progress_yield(result_url: str, log_lines: list[str]) -> tuple:
     """Build the in-progress yield tuple. Single source of truth for the
     yield shape: (file, plot, dropdown, stats, url, mod_heatmap, log)."""
-    return (None, _EMPTY, None, None, result_url, None, "\n".join(log_lines))
+    return (None, _empty_plot(), None, None, result_url, None, "\n".join(log_lines))
 
 
 def run_pipeline(
@@ -650,7 +654,7 @@ def run_pipeline(
         stats_md = _build_stats_table(final_path, group_name)
         mod_heatmap = _build_mod_heatmap(final_path, group_name)
 
-        save_results(final_path, group_name, fig, stats_md, names, job_id=job_id)
+        save_results(final_path, group_name, fig, stats_md, names, job_id=job_id, mod_heatmap=mod_heatmap)
 
         log(f"\nDone. Generated {len(names)} profile(s).")
         log(f"Results available at: {result_url} (expires in {RESULTS_TTL_HOURS}h)")
@@ -765,7 +769,6 @@ def load_example():
         if lower.endswith((".fasta", ".fa")):
             fasta = path
         elif "untreated" in lower or "nomod" in lower or "control" in lower:
-            treated = treated  # don't overwrite treated
             untreated = path
         elif lower.endswith((".fastq", ".fq", ".fastq.gz", ".fq.gz")):
             treated = path
@@ -783,18 +786,20 @@ def load_example():
 def load_saved_result(job_id: str):
     """Load a previously saved result by job ID."""
     job_id = (job_id or "").strip()
+    empty = _empty_plot()
     if not job_id:
-        return go.Figure(), None, "", ""
+        return empty, None, "", "", empty, ""
 
     job_dir = os.path.join(RESULTS_DIR, job_id)
     meta_path = os.path.join(job_dir, "meta.json")
     plot_path = os.path.join(job_dir, "plot.json")
+    heatmap_path = os.path.join(job_dir, "mod_heatmap.json")
 
     if not os.path.isdir(job_dir):
-        return go.Figure(), None, "", (
+        return empty, None, "", (
             f"Result not found. It may have expired "
             f"(results are kept for {RESULTS_TTL_HOURS} hours)."
-        )
+        ), empty, ""
 
     with open(meta_path) as f:
         meta = json.load(f)
@@ -802,81 +807,17 @@ def load_saved_result(job_id: str):
     with open(plot_path) as f:
         fig = go.Figure(json.load(f))
 
+    mod_heatmap = empty
+    if os.path.isfile(heatmap_path):
+        with open(heatmap_path) as f:
+            mod_heatmap = go.Figure(json.load(f))
+
     names = meta.get("names", [])
     dropdown_update = gr.Dropdown(choices=names, value=names[0] if names else None, visible=len(names) > 1)
 
-    return fig, dropdown_update, meta.get("stats_rows", meta.get("stats_md", [])), ""
+    return fig, dropdown_update, meta.get("stats_rows", meta.get("stats_md", [])), "", mod_heatmap, ""
 
 
-# --- Results page HTML template ---
-
-RESULTS_PAGE_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>cmuts results — {job_id}</title>
-    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-    <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-               max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #333; }}
-        h1 {{ font-size: 1.5rem; }}
-        h1 a {{ color: inherit; text-decoration: none; }}
-        .meta {{ color: #666; margin-bottom: 1.5rem; }}
-        table {{ border-collapse: collapse; margin: 1.5rem 0; }}
-        th, td {{ border: 1px solid #ddd; padding: 0.5rem 1rem; text-align: left; }}
-        th {{ background: #f5f5f5; }}
-        .download {{ display: inline-block; margin: 1rem 0; padding: 0.5rem 1.5rem;
-                     background: #4a90d9; color: white; text-decoration: none;
-                     border-radius: 4px; }}
-        .download:hover {{ background: #357abd; }}
-        .expiry {{ color: #999; font-size: 0.85rem; margin-top: 2rem; }}
-    </style>
-</head>
-<body>
-    <h1><a href="/">cmuts</a> — Results</h1>
-    <p class="meta">Job ID: <code>{job_id}</code></p>
-
-    <div id="plot"></div>
-    <script>
-        var plotData = {plot_json};
-        Plotly.newPlot('plot', plotData.data, plotData.layout, {{responsive: true}});
-    </script>
-
-    {stats_html}
-
-    <a class="download" href="/results/{job_id}/download">Download HDF5 file</a>
-
-    <p class="expiry">Results are stored for {ttl} hours and will be automatically deleted after that.</p>
-</body>
-</html>"""
-
-
-def _stats_to_html(stats) -> str:
-    """Convert stats (list of rows or legacy markdown string) to HTML table."""
-    if isinstance(stats, list):
-        if not stats:
-            return ""
-        html = "<table>\n"
-        html += "  <tr><th>Statistic</th><th>Value</th></tr>\n"
-        for row in stats:
-            if isinstance(row, list) and len(row) >= 2:
-                html += f"  <tr><td>{row[0]}</td><td>{row[1]}</td></tr>\n"
-        html += "</table>"
-        return html
-    # Legacy markdown format
-    if not isinstance(stats, str) or not stats.strip():
-        return ""
-    lines = [l.strip() for l in stats.strip().split("\n") if l.strip() and not l.strip().startswith("|---")]
-    if not lines:
-        return ""
-    html = "<table>\n"
-    for i, line in enumerate(lines):
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        tag = "th" if i == 0 else "td"
-        html += "  <tr>" + "".join(f"<{tag}>{c}</{tag}>" for c in cells) + "</tr>\n"
-    html += "</table>"
-    return html
 
 
 # --- Gradio UI ---
@@ -978,7 +919,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             with gr.Row():
                 prev_job_id = gr.Textbox(label="Job ID", placeholder="e.g. a3f2b1c4d5e6", scale=3)
                 load_btn = gr.Button("Load", variant="secondary", scale=1)
-            load_status = gr.Textbox(label="Status", interactive=False, visible=False)
+            load_status = gr.Textbox(label="Status", interactive=False)
 
         example_btn.click(
             fn=load_example,
@@ -1027,8 +968,20 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         load_btn.click(
             fn=load_saved_result,
             inputs=[prev_job_id],
-            outputs=[output_plot, seq_dropdown, output_stats, load_status],
+            outputs=[output_plot, seq_dropdown, output_stats, load_status, mod_heatmap_plot, output_log],
         )
+
+    def _load_from_query(request: gr.Request):
+        """Auto-load results when ?job_id= is present in the URL."""
+        job_id = (request.query_params.get("job_id") or "").strip()
+        if not job_id:
+            return [gr.update()] * 6
+        return load_saved_result(job_id)
+
+    demo.load(
+        fn=_load_from_query,
+        outputs=[output_plot, seq_dropdown, output_stats, load_status, mod_heatmap_plot, output_log],
+    )
 
     with gr.Tab("About"):
         gr.Markdown(
@@ -1126,12 +1079,12 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             ### Result link
 
             After the pipeline completes, a **result link** is displayed that
-            you can bookmark or share. The link opens a standalone page with
-            the interactive plot, summary statistics, and a download button
-            for the HDF5 file. Results are stored for **48 hours** and
-            automatically deleted after that.
+            you can bookmark or share. Opening the link loads the results
+            directly into the app with the interactive plots, summary
+            statistics, and HDF5 download. Results are stored for
+            **{RESULTS_TTL_HOURS} hours** and automatically deleted after that.
 
-            To reload previous results within the app, expand
+            To reload previous results manually, expand
             **Load previous results** on the Run tab and enter the job ID.
 
             ## Limits
@@ -1163,31 +1116,10 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 app = FastAPI()
 
 
-@app.get("/results/{job_id}", response_class=HTMLResponse)
+@app.get("/results/{job_id}")
 async def results_page(job_id: str):
-    job_dir = os.path.join(RESULTS_DIR, job_id)
-    if not os.path.isdir(job_dir):
-        return HTMLResponse(
-            "<h1>Result not found</h1><p>This result may have expired. "
-            f"Results are kept for {RESULTS_TTL_HOURS} hours.</p>"
-            '<p><a href="/">Return to cmuts</a></p>',
-            status_code=404,
-        )
-
-    with open(os.path.join(job_dir, "meta.json")) as f:
-        meta = json.load(f)
-    with open(os.path.join(job_dir, "plot.json")) as f:
-        plot_json = f.read()
-
-    stats_html = _stats_to_html(meta.get("stats_rows", meta.get("stats_md", "")))
-
-    html = RESULTS_PAGE_TEMPLATE.format(
-        job_id=job_id,
-        plot_json=plot_json,
-        stats_html=stats_html,
-        ttl=RESULTS_TTL_HOURS,
-    )
-    return HTMLResponse(html)
+    """Redirect to the Gradio app with the job ID as a query parameter."""
+    return RedirectResponse(url=f"/?job_id={job_id}")
 
 
 @app.get("/results/{job_id}/download")
