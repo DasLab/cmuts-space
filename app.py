@@ -399,8 +399,8 @@ def _read_profiles(h5_path: str, group_name: str) -> tuple[np.ndarray, list[str]
     return reactivity, names
 
 
-def _build_stats_table(h5_path: str, group_name: str) -> str:
-    """Build a markdown summary table from the output HDF5 file."""
+def _build_stats_table(h5_path: str, group_name: str) -> list[list[str]]:
+    """Build a stats table as a list of [Statistic, Value] rows."""
     with h5py.File(h5_path, "r") as f:
         grp = f[group_name] if group_name in f else f
         reactivity = np.array(grp["reactivity"])
@@ -414,28 +414,26 @@ def _build_stats_table(h5_path: str, group_name: str) -> str:
     valid = np.isfinite(reactivity)
 
     rows = [
-        ("References", f"{n_refs:,}"),
-        ("Reference length", f"{seq_len:,}"),
-        ("Total reads", f"{total_reads:,}"),
-        ("Mean reads per reference", f"{np.mean(reads):,.1f}"),
-        ("Median reads per reference", f"{int(np.median(reads)):,}"),
+        ["References", f"{n_refs:,}"],
+        ["Reference length", f"{seq_len:,}"],
+        ["Total reads", f"{total_reads:,}"],
+        ["Mean reads per reference", f"{np.mean(reads):,.1f}"],
+        ["Median reads per reference", f"{int(np.median(reads)):,}"],
     ]
 
     if valid.any():
         rows.extend([
-            ("Mean reactivity", f"{np.mean(reactivity[valid]):.3f}"),
-            ("Mean error", f"{np.mean(error[valid]):.3f}"),
-            ("Mean SNR", f"{np.mean(snr):.2f}"),
-            ("SNR > 1", f"{np.mean(snr > 1):.1%}"),
+            ["Mean reactivity", f"{np.mean(reactivity[valid]):.3f}"],
+            ["Mean error", f"{np.mean(error[valid]):.3f}"],
+            ["Mean SNR", f"{np.mean(snr):.2f}"],
+            ["SNR > 1", f"{np.mean(snr > 1):.1%}"],
         ])
 
     dropout = float(np.mean(reads == 0))
     if dropout > 0:
-        rows.append(("Dropout fraction", f"{dropout:.1%}"))
+        rows.append(["Dropout fraction", f"{dropout:.1%}"])
 
-    md = "| Statistic | Value |\n|-----------|-------|\n"
-    md += "\n".join(f"| {label} | {value} |" for label, value in rows)
-    return md
+    return rows
 
 
 # --- Results persistence ---
@@ -465,7 +463,7 @@ def save_results(
     h5_path: str,
     group_name: str,
     fig: go.Figure,
-    stats_md: str,
+    stats_rows: list[list[str]],
     names: list[str],
 ) -> str:
     """Save pipeline results to persistent storage. Returns the job ID."""
@@ -479,7 +477,7 @@ def save_results(
         "group_name": group_name,
         "created_at": time.time(),
         "names": names,
-        "stats_md": stats_md,
+        "stats_rows": stats_rows,
     }
     with open(os.path.join(job_dir, "meta.json"), "w") as f:
         json.dump(meta, f)
@@ -576,33 +574,33 @@ def run_pipeline(
 
         # Step 1: Align
         log("=== Step 1: Aligning reads ===")
-        yield None, empty, None, "", "", None, "\n".join(log_lines)
+        yield None, empty, None, None, "", None, "\n".join(log_lines)
 
         fastq_files = sorted(glob.glob(os.path.join(fastq_dir, "*")))
         alignments_dir = os.path.join(outdir, "alignments")
         align_cmd = _build_align_cmd(fasta_path, alignments_dir, fastq_files, align_cfg)
         if not run(align_cmd, cwd=outdir):
-            yield None, empty, None, "", "", None, "\n".join(log_lines)
+            yield None, empty, None, None, "", None, "\n".join(log_lines)
             return
-        yield None, empty, None, "", "", None, "\n".join(log_lines)
+        yield None, empty, None, None, "", None, "\n".join(log_lines)
 
         # Step 2: Count mutations
         log("\n=== Step 2: Counting mutations ===")
-        yield None, empty, None, "", "", None, "\n".join(log_lines)
+        yield None, empty, None, None, "", None, "\n".join(log_lines)
 
         bam_abs = _check_bam_files(alignments_dir)
         bam_files = sorted(os.path.relpath(p, outdir) for p in bam_abs)
         counts_h5 = "counts.h5"
         core_cmd = _build_core_cmd(fasta_path, counts_h5, bam_files, core_cfg)
         if not run(core_cmd, cwd=outdir):
-            yield None, empty, None, "", "", None, "\n".join(log_lines)
+            yield None, empty, None, None, "", None, "\n".join(log_lines)
             return
         _check_output_h5(os.path.join(outdir, counts_h5), "cmuts core")
-        yield None, empty, None, "", "", None, "\n".join(log_lines)
+        yield None, empty, None, None, "", None, "\n".join(log_lines)
 
         # Step 3: Normalize
         log("\n=== Step 3: Normalizing reactivities ===")
-        yield None, empty, None, "", "", None, "\n".join(log_lines)
+        yield None, empty, None, None, "", None, "\n".join(log_lines)
 
         mod_group = f"alignments/{mod_name}"
         nomod_group = f"alignments/{nomod_name}" if nomod_name else None
@@ -612,7 +610,7 @@ def run_pipeline(
             mod_group, group_name, nomod_group, norm_cfg,
         )
         if not run(norm_cmd, cwd=outdir):
-            yield None, empty, None, "", "", None, "\n".join(log_lines)
+            yield None, empty, None, None, "", None, "\n".join(log_lines)
             return
 
         profiles_path = os.path.join(outdir, profiles_h5)
@@ -643,11 +641,11 @@ def run_pipeline(
 
     except subprocess.TimeoutExpired:
         log(f"Pipeline timed out ({PIPELINE_TIMEOUT_SEC // 60} minute limit).")
-        yield None, empty, None, "", "", None, "\n".join(log_lines)
+        yield None, empty, None, None, "", None, "\n".join(log_lines)
     except Exception as e:
         log(f"Error: {e}")
         log(traceback.format_exc())
-        yield None, empty, None, "", "", None, "\n".join(log_lines)
+        yield None, empty, None, None, "", None, "\n".join(log_lines)
 
 
 # --- Gradio callbacks ---
@@ -765,7 +763,7 @@ def load_saved_result(job_id: str):
     names = meta.get("names", [])
     dropdown_update = gr.Dropdown(choices=names, value=names[0] if names else None, visible=len(names) > 1)
 
-    return fig, dropdown_update, meta.get("stats_md", ""), ""
+    return fig, dropdown_update, meta.get("stats_rows", meta.get("stats_md", [])), ""
 
 
 # --- Results page HTML template ---
@@ -812,9 +810,22 @@ RESULTS_PAGE_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
-def _md_table_to_html(md: str) -> str:
-    """Convert a simple markdown table to HTML."""
-    lines = [l.strip() for l in md.strip().split("\n") if l.strip() and not l.strip().startswith("|---")]
+def _stats_to_html(stats) -> str:
+    """Convert stats (list of rows or legacy markdown string) to HTML table."""
+    if isinstance(stats, list):
+        if not stats:
+            return ""
+        html = "<table>\n"
+        html += "  <tr><th>Statistic</th><th>Value</th></tr>\n"
+        for row in stats:
+            if isinstance(row, list) and len(row) >= 2:
+                html += f"  <tr><td>{row[0]}</td><td>{row[1]}</td></tr>\n"
+        html += "</table>"
+        return html
+    # Legacy markdown format
+    if not isinstance(stats, str) or not stats.strip():
+        return ""
+    lines = [l.strip() for l in stats.strip().split("\n") if l.strip() and not l.strip().startswith("|---")]
     if not lines:
         return ""
     html = "<table>\n"
@@ -913,7 +924,11 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 mod_heatmap_plot = gr.Plot(label="Modification Heatmap", visible=True)
             with gr.Column(scale=1):
                 pass
-        output_stats = gr.Markdown(label="Summary Statistics")
+        output_stats = gr.Dataframe(
+            label="Summary Statistics",
+            headers=["Statistic", "Value"],
+            interactive=False,
+        )
         with gr.Accordion("Log", open=False):
             output_log = gr.Textbox(label="Log", lines=15, max_lines=30, show_label=False)
 
@@ -1124,7 +1139,7 @@ async def results_page(job_id: str):
     with open(os.path.join(job_dir, "plot.json")) as f:
         plot_json = f.read()
 
-    stats_html = _md_table_to_html(meta.get("stats_md", ""))
+    stats_html = _stats_to_html(meta.get("stats_rows", meta.get("stats_md", "")))
 
     html = RESULTS_PAGE_TEMPLATE.format(
         job_id=job_id,
