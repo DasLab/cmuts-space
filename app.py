@@ -334,6 +334,8 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
         colorscale="RdPu",
         zmin=-4,
         zmax=0,
+        xgap=2,
+        ygap=2,
         text=hover_text,
         hoverinfo="text",
         colorbar=dict(
@@ -345,13 +347,18 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
     fig.update_layout(
         title="Modification Heatmap",
         xaxis_title="Modification Type",
-        xaxis=dict(scaleanchor="y", scaleratio=1),
+        xaxis=dict(
+            scaleanchor="y", scaleratio=1,
+            showgrid=False, zeroline=False,
+        ),
         yaxis_title="Reference Nucleotide",
-        yaxis=dict(autorange="reversed"),
-        template="plotly_white",
+        yaxis=dict(
+            autorange="reversed",
+            showgrid=False, zeroline=False,
+            ticklabelstandoff=5,
+        ),
+        plot_bgcolor="black",
         # Fixed dimensions to get square cells: 4 rows x 7 cols.
-        # Plot area = height - margins_tb, width - margins_lr - colorbar.
-        # Cell size ~55px: 4*55=220 plot height, 7*55=385 plot width.
         height=300,
         width=550,
         margin=dict(l=50, r=20, t=40, b=40),
