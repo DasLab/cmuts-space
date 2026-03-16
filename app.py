@@ -465,9 +465,11 @@ def save_results(
     fig: go.Figure,
     stats_rows: list[list[str]],
     names: list[str],
+    job_id: str | None = None,
 ) -> str:
     """Save pipeline results to persistent storage. Returns the job ID."""
-    job_id = uuid.uuid4().hex[:12]
+    if job_id is None:
+        job_id = uuid.uuid4().hex[:12]
     job_dir = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(job_dir)
 
@@ -532,6 +534,13 @@ def run_pipeline(
     os.makedirs(outdir)
 
     group_name = _sanitize_group_name(group_name)
+
+    # Generate job ID and result URL upfront so the link appears immediately
+    job_id = uuid.uuid4().hex[:12]
+    space_host = os.environ.get("SPACE_HOST", "")
+    base = f"https://{space_host}" if space_host else ""
+    result_url = f"{base}/results/{job_id}"
+
     log_lines: list[str] = []
 
     def log(msg: str) -> None:
@@ -574,33 +583,33 @@ def run_pipeline(
 
         # Step 1: Align
         log("=== Step 1: Aligning reads ===")
-        yield None, empty, None, None, "", None, "\n".join(log_lines)
+        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
 
         fastq_files = sorted(glob.glob(os.path.join(fastq_dir, "*")))
         alignments_dir = os.path.join(outdir, "alignments")
         align_cmd = _build_align_cmd(fasta_path, alignments_dir, fastq_files, align_cfg)
         if not run(align_cmd, cwd=outdir):
-            yield None, empty, None, None, "", None, "\n".join(log_lines)
+            yield None, empty, None, None, result_url, None, "\n".join(log_lines)
             return
-        yield None, empty, None, None, "", None, "\n".join(log_lines)
+        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
 
         # Step 2: Count mutations
         log("\n=== Step 2: Counting mutations ===")
-        yield None, empty, None, None, "", None, "\n".join(log_lines)
+        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
 
         bam_abs = _check_bam_files(alignments_dir)
         bam_files = sorted(os.path.relpath(p, outdir) for p in bam_abs)
         counts_h5 = "counts.h5"
         core_cmd = _build_core_cmd(fasta_path, counts_h5, bam_files, core_cfg)
         if not run(core_cmd, cwd=outdir):
-            yield None, empty, None, None, "", None, "\n".join(log_lines)
+            yield None, empty, None, None, result_url, None, "\n".join(log_lines)
             return
         _check_output_h5(os.path.join(outdir, counts_h5), "cmuts core")
-        yield None, empty, None, None, "", None, "\n".join(log_lines)
+        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
 
         # Step 3: Normalize
         log("\n=== Step 3: Normalizing reactivities ===")
-        yield None, empty, None, None, "", None, "\n".join(log_lines)
+        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
 
         mod_group = f"alignments/{mod_name}"
         nomod_group = f"alignments/{nomod_name}" if nomod_name else None
@@ -610,7 +619,7 @@ def run_pipeline(
             mod_group, group_name, nomod_group, norm_cfg,
         )
         if not run(norm_cmd, cwd=outdir):
-            yield None, empty, None, None, "", None, "\n".join(log_lines)
+            yield None, empty, None, None, result_url, None, "\n".join(log_lines)
             return
 
         profiles_path = os.path.join(outdir, profiles_h5)
@@ -630,10 +639,7 @@ def run_pipeline(
         stats_md = _build_stats_table(final_path, group_name)
         mod_heatmap = _build_mod_heatmap(final_path, group_name)
 
-        job_id = save_results(final_path, group_name, fig, stats_md, names)
-        space_host = os.environ.get("SPACE_HOST", "")
-        base = f"https://{space_host}" if space_host else ""
-        result_url = f"{base}/results/{job_id}"
+        save_results(final_path, group_name, fig, stats_md, names, job_id=job_id)
 
         log(f"\nDone. Generated {len(names)} profile(s).")
         log(f"Results available at: {result_url} (expires in {RESULTS_TTL_HOURS}h)")
@@ -641,11 +647,11 @@ def run_pipeline(
 
     except subprocess.TimeoutExpired:
         log(f"Pipeline timed out ({PIPELINE_TIMEOUT_SEC // 60} minute limit).")
-        yield None, empty, None, None, "", None, "\n".join(log_lines)
+        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
     except Exception as e:
         log(f"Error: {e}")
         log(traceback.format_exc())
-        yield None, empty, None, None, "", None, "\n".join(log_lines)
+        yield None, empty, None, None, result_url, None, "\n".join(log_lines)
 
 
 # --- Gradio callbacks ---
