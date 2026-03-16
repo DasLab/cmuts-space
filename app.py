@@ -24,13 +24,14 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 # --- Constants and paths ---
 
-EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "examples")
-MAX_FASTQ_MB = 500
-RESULTS_TTL_HOURS = 48
+EXAMPLES_DIR = os.environ.get("CMUTS_EXAMPLES_DIR", os.path.join(os.path.dirname(__file__), "examples"))
+MAX_FASTQ_MB = int(os.environ.get("CMUTS_MAX_FASTQ_MB", "500"))
+RESULTS_TTL_HOURS = int(os.environ.get("CMUTS_RESULTS_TTL_HOURS", "48"))
 DEFAULT_GROUP_NAME = "profile"
-PIPELINE_TIMEOUT_SEC = 600
+PIPELINE_TIMEOUT_SEC = int(os.environ.get("CMUTS_PIPELINE_TIMEOUT_SEC", "600"))
 
-RESULTS_DIR = "/data/results" if os.path.isdir("/data") else "/tmp/cmuts_results"
+_default_results_dir = "/data/results" if os.path.isdir("/data") else "/tmp/cmuts_results"
+RESULTS_DIR = os.environ.get("CMUTS_RESULTS_DIR", _default_results_dir)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 _FASTQ_SUFFIXES = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
