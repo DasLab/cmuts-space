@@ -350,8 +350,8 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
         yaxis=dict(autorange="reversed"),
         template="plotly_white",
         height=350,
-        width=500,
         margin=dict(l=50, r=20, t=40, b=40),
+        autosize=True,
     )
     return fig
 
@@ -887,7 +887,11 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         )
         seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
         output_plot = gr.Plot(label="Reactivity Profile")
-        mod_heatmap_plot = gr.Plot(label="Modification Heatmap", visible=True)
+        with gr.Row():
+            with gr.Column(scale=1):
+                mod_heatmap_plot = gr.Plot(label="Modification Heatmap", visible=True)
+            with gr.Column(scale=1):
+                pass
         output_stats = gr.Markdown(label="Summary Statistics")
         with gr.Accordion("Log", open=False):
             output_log = gr.Textbox(label="Log", lines=15, max_lines=30, show_label=False)
