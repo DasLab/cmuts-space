@@ -334,8 +334,8 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
         colorscale="RdPu",
         zmin=-4,
         zmax=0,
-        xgap=2,
-        ygap=2,
+        xgap=1,
+        ygap=1,
         text=hover_text,
         hoverinfo="text",
         colorbar=dict(
@@ -344,21 +344,33 @@ def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
             ticktext=["10⁻⁴", "10⁻³", "10⁻²", "10⁻¹", "10⁰"],
         ),
     ))
+
+    # Draw thin black outlines around each cell
+    for i in range(len(_HEATMAP_NTS)):
+        for j in range(len(_HEATMAP_MODS)):
+            fig.add_shape(
+                type="rect",
+                x0=j - 0.5, x1=j + 0.5,
+                y0=i - 0.5, y1=i + 0.5,
+                line=dict(color="black", width=1),
+                layer="above",
+            )
+
     fig.update_layout(
         title="Modification Heatmap",
         xaxis_title="Modification Type",
         xaxis=dict(
-            scaleanchor="y", scaleratio=1,
             showgrid=False, zeroline=False,
+            constrain="domain",
         ),
         yaxis_title="Reference Nucleotide",
         yaxis=dict(
             autorange="reversed",
             showgrid=False, zeroline=False,
-            ticklabelstandoff=5,
+            scaleanchor="x",
+            constrain="domain",
         ),
-        plot_bgcolor="black",
-        # Fixed dimensions to get square cells: 4 rows x 7 cols.
+        template="plotly_white",
         height=300,
         width=550,
         margin=dict(l=50, r=20, t=40, b=40),
