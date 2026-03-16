@@ -232,7 +232,9 @@ def _build_single_profile_plot(
     fig.update_layout(
         title=title,
         xaxis_title="Position",
+        xaxis=dict(minor=dict(ticks="outside", showgrid=True), showgrid=True),
         yaxis_title="Reactivity",
+        yaxis=dict(minor=dict(ticks="outside", showgrid=True), showgrid=True),
         template="plotly_white",
         height=400,
         margin=dict(l=50, r=20, t=40, b=40),
