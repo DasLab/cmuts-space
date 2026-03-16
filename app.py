@@ -467,17 +467,15 @@ def run_pipeline(
     empty = _empty_plot()
 
     if fasta_file is None or mod_fastq is None:
-        yield None, empty, None, "", "", None, "Please upload a FASTA file and at least one modified FASTQ file."
-        return
+        raise gr.Error("Please upload a FASTA file and at least one modified FASTQ file.")
 
     for path, label in [(mod_fastq, "Modified FASTQ"), (nomod_fastq, "Control FASTQ")]:
         if path is not None and _file_size_mb(path) > MAX_FASTQ_MB:
-            yield None, empty, None, "", "", None, (
+            raise gr.Error(
                 f"{label} is {_file_size_mb(path):.0f} MB. "
                 f"The free tier has limited RAM (16 GB); files over {MAX_FASTQ_MB} MB "
                 f"may cause out-of-memory errors. Consider downsampling first."
             )
-            return
 
     cleanup_old_results()
 
