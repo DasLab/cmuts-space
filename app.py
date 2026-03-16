@@ -482,8 +482,8 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         with gr.Row():
             with gr.Column():
                 fasta_input = gr.File(label="Reference FASTA", file_types=[".fasta", ".fa"])
-                mod_input = gr.File(label="Modified FASTQ (required)", file_types=[".fastq", ".fq", ".fastq.gz", ".fq.gz"])
-                nomod_input = gr.File(label="Control FASTQ (optional)", file_types=[".fastq", ".fq", ".fastq.gz", ".fq.gz"])
+                mod_input = gr.File(label="Modified FASTQ (required)", file_types=[".fastq", ".fq", ".gz"])
+                nomod_input = gr.File(label="Control FASTQ (optional)", file_types=[".fastq", ".fq", ".gz"])
                 group_name = gr.Textbox(label="Group name", value="experiment", placeholder="e.g. DMS, 2A3")
                 example_btn = gr.Button("Load example data", variant="secondary", size="sm")
 
