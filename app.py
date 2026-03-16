@@ -729,13 +729,38 @@ def select_profile(
 
 
 def load_example():
-    """Load bundled example files into the input fields."""
-    return (
-        os.path.join(EXAMPLES_DIR, "ref.fasta"),
-        os.path.join(EXAMPLES_DIR, "treated.fastq.gz"),
-        None,
-        "example",
-    )
+    """Load bundled example files by convention from the examples directory.
+
+    Expected layout:
+        examples/
+            ref.fasta (or .fa)          — required
+            treated.fastq.gz (or .fq*)  — required (modified condition)
+            untreated.fastq.gz          — optional (control condition)
+            group.txt                   — optional (single line: group name)
+    """
+    fasta = None
+    treated = None
+    untreated = None
+
+    for f in os.listdir(EXAMPLES_DIR):
+        path = os.path.join(EXAMPLES_DIR, f)
+        lower = f.lower()
+        if lower.endswith((".fasta", ".fa")):
+            fasta = path
+        elif "untreated" in lower or "nomod" in lower or "control" in lower:
+            treated = treated  # don't overwrite treated
+            untreated = path
+        elif lower.endswith((".fastq", ".fq", ".fastq.gz", ".fq.gz")):
+            treated = path
+
+    group_file = os.path.join(EXAMPLES_DIR, "group.txt")
+    if os.path.isfile(group_file):
+        with open(group_file) as f:
+            group_name = f.read().strip() or "example"
+    else:
+        group_name = "example"
+
+    return fasta, treated, untreated, group_name
 
 
 def load_saved_result(job_id: str):
