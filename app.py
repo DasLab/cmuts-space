@@ -357,14 +357,20 @@ def _empty_plot() -> go.Figure:
 
 
 
+def _plot_update(fig: go.Figure | None):
+    """Wrap a figure in a gr.update that shows/hides the component."""
+    if fig is None:
+        return gr.update(visible=False, value=None)
+    return gr.update(visible=True, value=fig)
+
+
 def _progress_yield(result_url: str, log_lines: list[str]) -> tuple:
     """Build the in-progress yield tuple. Single source of truth for the
     yield shape: (file, profile, dropdown, stats, url,
     mod_heatmap, termination, coverage, read_hist, cumulative_reads,
     snr_scaling, mi, correlation, log)."""
-    e = _empty_plot()
-    # file, profile, dropdown, stats, url, then one slot per remaining plot key, then log
-    return (None, e, None, None, result_url) + (None,) * (len(_PLOT_KEYS) - 1) + ("\n".join(log_lines),)
+    hidden = gr.update(visible=False, value=None)
+    return (None, hidden, None, None, result_url) + (hidden,) * (len(_PLOT_KEYS) - 1) + ("\n".join(log_lines),)
 
 
 def run_pipeline(
@@ -520,8 +526,8 @@ def run_pipeline(
         log(f"\nDone. Generated {len(names)} profile(s).")
         log(f"Results available at: {result_url} (expires in {RESULTS_TTL_HOURS}h)")
         yield (
-            final_path, plots["profile"], dropdown_update, stats_md, result_url,
-            *[plots[k] for k in _PLOT_KEYS[1:]],
+            final_path, _plot_update(plots["profile"]), dropdown_update, stats_md, result_url,
+            *[_plot_update(plots[k]) for k in _PLOT_KEYS[1:]],
             "\n".join(log_lines),
         )
 
@@ -656,19 +662,19 @@ def load_example():
 def load_saved_result(job_id: str):
     """Load a previously saved result by job ID."""
     job_id = (job_id or "").strip()
-    empty = _empty_plot()
+    hidden = gr.update(visible=False, value=None)
     n_extra = len(_PLOT_KEYS) - 1  # all plot keys except "profile"
     if not job_id:
-        return (empty, None, "", "") + (None,) * n_extra + ("",)
+        return (hidden, None, "", "") + (hidden,) * n_extra + ("",)
 
     job_dir = os.path.join(RESULTS_DIR, job_id)
     meta_path = os.path.join(job_dir, "meta.json")
 
     if not os.path.isdir(job_dir):
-        return (empty, None, "", (
+        return (hidden, None, "", (
             f"Result not found. It may have expired "
             f"(results are kept for {RESULTS_TTL_HOURS} hours)."
-        )) + (None,) * n_extra + ("",)
+        )) + (hidden,) * n_extra + ("",)
 
     with open(meta_path) as f:
         meta = json.load(f)
@@ -686,9 +692,9 @@ def load_saved_result(job_id: str):
     dropdown_update = gr.Dropdown(choices=names, value=names[0] if names else None, visible=len(names) > 1)
 
     return (
-        loaded.get("profile", empty), dropdown_update,
+        _plot_update(loaded.get("profile")), dropdown_update,
         meta.get("stats_rows", meta.get("stats_md", [])), "",
-        *[loaded.get(k) for k in _PLOT_KEYS[1:]],
+        *[_plot_update(loaded.get(k)) for k in _PLOT_KEYS[1:]],
         "",
     )
 
@@ -776,22 +782,22 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             interactive=False,
         )
         seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
-        output_plot = gr.Plot(label="Reactivity Profile")
+        output_plot = gr.Plot(label="Reactivity Profile", visible=False)
         with gr.Row():
             with gr.Column(scale=1):
-                mod_heatmap_plot = gr.Plot(label="Modification Heatmap")
+                mod_heatmap_plot = gr.Plot(label="Modification Heatmap", visible=False)
             with gr.Column(scale=1):
                 pass
         with gr.Row():
-            termination_plot = gr.Plot(label="Termination by Position")
-            coverage_plot = gr.Plot(label="Coverage by Position")
+            termination_plot = gr.Plot(label="Termination by Position", visible=False)
+            coverage_plot = gr.Plot(label="Coverage by Position", visible=False)
         with gr.Row():
-            read_hist_plot = gr.Plot(label="Read Depth Distribution")
-            cumulative_reads_plot = gr.Plot(label="Cumulative Reads")
-        snr_scaling_plot = gr.Plot(label="SNR vs Read Depth")
+            read_hist_plot = gr.Plot(label="Read Depth Distribution", visible=False)
+            cumulative_reads_plot = gr.Plot(label="Cumulative Reads", visible=False)
+        snr_scaling_plot = gr.Plot(label="SNR vs Read Depth", visible=False)
         with gr.Row():
-            mi_plot = gr.Plot(label="Mutual Information")
-            correlation_plot = gr.Plot(label="Correlation")
+            mi_plot = gr.Plot(label="Mutual Information", visible=False)
+            correlation_plot = gr.Plot(label="Correlation", visible=False)
         output_stats = gr.Dataframe(
             label="Summary Statistics",
             headers=["Statistic", "Value"],
