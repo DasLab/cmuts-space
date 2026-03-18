@@ -27,6 +27,7 @@ from cmuts.visualize.plotly import (
     plot_examples,
     plot_heatmap,
     plot_mi,
+    plot_pairwise_coverage,
     plot_profile,
     plot_read_hist,
     plot_snr_scaling,
@@ -75,6 +76,7 @@ class ResultUpdate:
     snr_scaling: object = None
     mi: object = None
     correlation: object = None
+    pairwise_coverage: object = None
     log: str = ""
     group_name: object = None
 
@@ -86,7 +88,8 @@ class ResultUpdate:
             seq_dropdown=None, stats=h, load_status="",
             mod_heatmap=h, termination=h, coverage=h,
             read_hist=h, cumulative_reads=h, snr_scaling=h,
-            mi=h, correlation=h, log="", group_name=gr.update(),
+            mi=h, correlation=h, pairwise_coverage=h,
+            log="", group_name=gr.update(),
         )
 
     def to_tuple(self) -> tuple:
@@ -96,7 +99,7 @@ class ResultUpdate:
             self.stats, self.load_status,
             self.mod_heatmap, self.termination, self.coverage,
             self.read_hist, self.cumulative_reads, self.snr_scaling,
-            self.mi, self.correlation,
+            self.mi, self.correlation, self.pairwise_coverage,
             self.log, self.group_name,
         )
 
@@ -117,6 +120,7 @@ class CoreConfig:
     no_insertions: bool = True
     no_mismatches: bool = False
     strand: str = "both"
+    compute_pairwise: bool = False
 
 
 @dataclass
@@ -131,6 +135,7 @@ class NormConfig:
     blank_cutoff: int = 10
     norm_cutoff: int = 500
     norm_percentile: int = 90
+    sig: float = 0.05
 
 
 # --- Input validation ---
@@ -201,6 +206,8 @@ def _build_core_cmd(
         cmd.append("--no-reverse")
     elif cfg.strand == "reverse":
         cmd.append("--only-reverse")
+    if cfg.compute_pairwise:
+        cmd.append("--pairwise")
     cmd.extend(bam_files)
     return cmd
 
@@ -267,6 +274,12 @@ def _build_plots(
         plots["correlation"] = plot_correlation(np.asarray(combined.covariance)[0], name)
     else:
         plots["correlation"] = None
+
+    if combined.pairs is not None:
+        pairs = np.asarray(combined.pairs)
+        plots["pairwise_coverage"] = plot_pairwise_coverage(pairs.sum(axis=(-1, -2))[0], name)
+    else:
+        plots["pairwise_coverage"] = None
 
     return plots
 
@@ -356,6 +369,7 @@ def cleanup_old_results() -> None:
 _PLOT_KEYS = [
     "profile", "mod_heatmap", "termination", "coverage",
     "read_hist", "cumulative_reads", "snr_scaling", "mi", "correlation",
+    "pairwise_coverage",
 ]
 
 
@@ -542,7 +556,7 @@ def run_pipeline(
             norm_cfg.norm_method,
             (norm_cfg.blank_5p, norm_cfg.blank_3p),
             (norm_cfg.clip_low, norm_cfg.clip_high),
-            0.05,  # significance level
+            norm_cfg.sig,
         )
 
         counts_path = os.path.join(outdir, counts_h5)
@@ -585,6 +599,7 @@ def run_pipeline(
             snr_scaling=_plot_update(plots["snr_scaling"]),
             mi=_plot_update(plots["mi"]),
             correlation=_plot_update(plots["correlation"]),
+            pairwise_coverage=_plot_update(plots["pairwise_coverage"]),
             log="\n".join(log_lines),
             group_name=gr.update(),
         ).to_tuple()
@@ -625,6 +640,8 @@ def _run_pipeline_gradio(
     blank_cutoff: int,
     norm_cutoff: int,
     norm_percentile: int,
+    compute_pairwise: bool,
+    sig: float,
 ):
     """Gradio-facing wrapper: packs flat args into dataclasses."""
     yield from run_pipeline(
@@ -645,6 +662,7 @@ def _run_pipeline_gradio(
             no_insertions=no_insertions,
             no_mismatches=no_mismatches,
             strand=strand or "both",
+            compute_pairwise=compute_pairwise,
         ),
         norm_cfg=NormConfig(
             norm_method=norm_method or "ubr",
@@ -657,6 +675,7 @@ def _run_pipeline_gradio(
             blank_cutoff=int(blank_cutoff or 10),
             norm_cutoff=int(norm_cutoff or 500),
             norm_percentile=int(norm_percentile or 90),
+            sig=float(sig or 0.05),
         ),
     )
 
@@ -665,12 +684,12 @@ def select_profile(
     seq_name: str,
     output_file: str,
     group_name: str,
-) -> go.Figure:
-    """Switch the displayed profile when the user picks a different sequence."""
-    from cmuts.visualize.plotly import plot_profile
-
+) -> tuple:
+    """Switch the displayed profile and pairwise plots for the selected sequence."""
     if not output_file or not seq_name:
-        return go.Figure()
+        empty = go.Figure()
+        hidden = gr.update(visible=False, value=None)
+        return empty, hidden, hidden, hidden
     group_name = _sanitize_group_name(group_name)
     reactivity, names = _read_profiles(output_file, group_name)
     try:
@@ -680,7 +699,15 @@ def select_profile(
     with h5py.File(output_file, "r") as f:
         grp = f[group_name] if group_name in f else f
         error = np.array(grp["error"])
-    return plot_profile(reactivity[idx], error[idx], names[idx])
+        mi_fig = None
+        corr_fig = None
+        pw_cov_fig = None
+        if "mutual-information" in grp:
+            mi_fig = plot_mi(np.array(grp["mutual-information"])[idx], names[idx])
+        if "covariance" in grp:
+            corr_fig = plot_correlation(np.array(grp["covariance"])[idx], names[idx])
+    profile_fig = plot_profile(reactivity[idx], error[idx], names[idx])
+    return profile_fig, _plot_update(mi_fig), _plot_update(corr_fig), _plot_update(pw_cov_fig)
 
 
 def load_example():
@@ -769,6 +796,7 @@ def load_saved_result(job_id: str):
         snr_scaling=_plot_update(loaded.get("snr_scaling")),
         mi=_plot_update(loaded.get("mi")),
         correlation=_plot_update(loaded.get("correlation")),
+        pairwise_coverage=_plot_update(loaded.get("pairwise_coverage")),
         group_name=saved_group,
     ).to_tuple()
 
@@ -848,6 +876,18 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                     norm_cutoff = gr.Number(value=500, label="Min reads for normalization", precision=0)
                     norm_percentile = gr.Slider(minimum=50, maximum=100, step=1, value=90, label="Normalization percentile")
 
+            with gr.Accordion("Pairwise analysis", open=False):
+                gr.Markdown(
+                    "Compute pairwise modification correlations (mutual information "
+                    "and Pearson correlation). Cost is O(L&sup2;) in sequence length, "
+                    "so this is slow for long references."
+                )
+                compute_pairwise = gr.Checkbox(label="Compute pairwise correlations", value=False)
+                sig = gr.Slider(
+                    minimum=0.001, maximum=0.1, step=0.001, value=0.05,
+                    label="Significance threshold (Bonferroni-corrected)",
+                )
+
             run_btn = gr.Button("Run Pipeline", variant="primary")
 
         gr.Markdown("### Results")
@@ -874,6 +914,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         with gr.Row():
             mi_plot = gr.Plot(label="Mutual Information", visible=False)
             correlation_plot = gr.Plot(label="Correlation", visible=False)
+        pairwise_coverage_plot = gr.Plot(label="Pairwise Coverage", visible=False)
         output_stats = gr.Dataframe(
             label="Summary Statistics",
             headers=["Statistic", "Value"],
@@ -901,7 +942,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             output_stats, load_status,
             mod_heatmap_plot, termination_plot, coverage_plot,
             read_hist_plot, cumulative_reads_plot, snr_scaling_plot,
-            mi_plot, correlation_plot,
+            mi_plot, correlation_plot, pairwise_coverage_plot,
             output_log, group_name,
         ]
 
@@ -934,6 +975,9 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 blank_cutoff,
                 norm_cutoff,
                 norm_percentile,
+                # Pairwise
+                compute_pairwise,
+                sig,
             ],
             outputs=_result_outputs,
         )
@@ -941,7 +985,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         seq_dropdown.change(
             fn=select_profile,
             inputs=[seq_dropdown, output_file, group_name],
-            outputs=[output_plot],
+            outputs=[output_plot, mi_plot, correlation_plot, pairwise_coverage_plot],
         )
 
         load_btn.click(
