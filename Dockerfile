@@ -37,6 +37,8 @@ RUN cp /cmuts/htscodecs/lib/*.so* /usr/local/lib/ && ldconfig
 # Patch Helvetica -> Nimbus Sans (available from fonts-urw-base35)
 RUN sed -i 's/font.family.*=.*"Helvetica"/font.family"] = "Nimbus Sans"/' \
     /cmuts/src/python/cmuts/visualize/plotting.py && \
+    sed -i 's/FONT_FAMILY = "Helvetica"/FONT_FAMILY = "Nimbus Sans"/' \
+    /cmuts/src/python/cmuts/visualize/plotly.py && \
     fc-cache -f && \
     python3 -c "import matplotlib.font_manager; matplotlib.font_manager._load_fontmanager(try_read_cache=False)"
 

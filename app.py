@@ -19,6 +19,19 @@ import gradio as gr
 import h5py
 import numpy as np
 import plotly.graph_objects as go
+import cmuts
+from cmuts.visualize.plotly import (
+    plot_correlation,
+    plot_coverage,
+    plot_cumulative_reads,
+    plot_examples,
+    plot_heatmap,
+    plot_mi,
+    plot_profile,
+    plot_read_hist,
+    plot_snr_scaling,
+    plot_termination,
+)
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
@@ -145,41 +158,6 @@ def _build_core_cmd(
     return cmd
 
 
-def _build_normalize_cmd(
-    input_h5: str,
-    output_h5: str,
-    fasta_path: str,
-    mod_group: str,
-    group_name: str,
-    nomod_group: str | None,
-    cfg: NormConfig,
-) -> list[str]:
-    cmd = [
-        "cmuts", "normalize",
-        "-o", output_h5,
-        "--mod", mod_group,
-        "--fasta", fasta_path,
-        "--group", group_name,
-        "--norm", cfg.norm_method,
-        "--blank-5p", str(cfg.blank_5p),
-        "--blank-3p", str(cfg.blank_3p),
-        "--blank-cutoff", str(cfg.blank_cutoff),
-        "--norm-cutoff", str(cfg.norm_cutoff),
-        "--norm-percentile", str(cfg.norm_percentile),
-    ]
-    if nomod_group:
-        cmd.extend(["--nomod", nomod_group])
-    if cfg.no_insertions:
-        cmd.append("--no-insertions")
-    if cfg.no_deletions:
-        cmd.append("--no-deletions")
-    if cfg.clip_low:
-        cmd.append("--clip-low")
-    if cfg.clip_high:
-        cmd.append("--clip-high")
-    cmd.append(input_h5)
-    return cmd
-
 
 # --- Intermediate checks ---
 
@@ -208,177 +186,42 @@ def _check_output_h5(path: str, step: str) -> None:
 # --- HDF5 reading and plotting ---
 
 
-def _build_single_profile_plot(
-    reactivity: np.ndarray,
-    sequence: str | None,
-    title: str,
-) -> go.Figure:
-    """Build an interactive Plotly bar chart for a single reactivity profile."""
-    x = np.arange(1, len(reactivity) + 1)
-    if sequence:
-        hover = [
-            f"{nt}{p}<br>Reactivity: {r:.4f}"
-            for p, r, nt in zip(x, reactivity, sequence)
-        ]
+def _build_plots(
+    mod: cmuts.ProbingData,
+    nomod: cmuts.ProbingData | None,
+    combined: cmuts.ProbingData,
+    name: str,
+) -> dict[str, go.Figure | None]:
+    """Build all plots from in-memory ProbingData objects."""
+    plots: dict[str, go.Figure | None] = {}
+
+    plots["profile"] = plot_examples(
+        np.asarray(combined.reactivity), np.asarray(combined.error), name,
+    )
+    plots["mod_heatmap"] = plot_heatmap(np.asarray(combined.heatmap), name)
+    plots["termination"] = plot_termination(np.asarray(combined.terminations), name)
+    plots["coverage"] = plot_coverage(
+        np.asarray(combined.coverage), np.asarray(combined.reads), name,
+    )
+
+    is_multi = not combined.single()
+    reads = np.asarray(combined.reads)
+    plots["read_hist"] = plot_read_hist(reads, name) if is_multi else None
+    plots["cumulative_reads"] = plot_cumulative_reads(reads, name) if is_multi else None
+
+    plots["snr_scaling"] = plot_snr_scaling(mod, nomod, combined, name)
+
+    if combined.mi is not None:
+        plots["mi"] = plot_mi(np.asarray(combined.mi)[0], name)
     else:
-        hover = [f"Position {p}<br>Reactivity: {r:.4f}" for p, r in zip(x, reactivity)]
+        plots["mi"] = None
 
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=x,
-        y=reactivity,
-        hovertext=hover,
-        hoverinfo="text",
-        marker_color="indianred",
-    ))
-    fig.update_layout(
-        title=title,
-        xaxis_title="Position",
-        xaxis=dict(minor=dict(ticks="outside", showgrid=True), showgrid=True),
-        yaxis_title="Reactivity",
-        yaxis=dict(minor=dict(ticks="outside", showgrid=True), showgrid=True),
-        template="plotly_white",
-        height=400,
-        margin=dict(l=50, r=20, t=40, b=40),
-    )
-    return fig
+    if combined.covariance is not None:
+        plots["correlation"] = plot_correlation(np.asarray(combined.covariance)[0], name)
+    else:
+        plots["correlation"] = None
 
-
-def _build_reactivity_heatmap(
-    reactivity: np.ndarray,
-    names: list[str],
-) -> go.Figure:
-    """Build an interactive heatmap of reactivity across sequences and positions.
-
-    Used when there are multiple reference sequences (matching cmuts behavior:
-    single sequence -> line plot, multiple -> heatmap).
-    """
-    # Cap at 250 sequences to keep the plot responsive
-    n_display = min(reactivity.shape[0], 250)
-    data = reactivity[:n_display]
-    display_names = names[:n_display]
-
-    fig = go.Figure()
-    fig.add_trace(go.Heatmap(
-        z=data,
-        x=np.arange(1, data.shape[1] + 1),
-        y=display_names,
-        colorscale="RdPu",
-        zmin=0,
-        zmax=1,
-        colorbar=dict(title="Reactivity"),
-        hovertemplate="Position %{x}<br>%{y}<br>Reactivity: %{z:.4f}<extra></extra>",
-    ))
-    title = "Reactivity Profiles"
-    if n_display < reactivity.shape[0]:
-        title += f" (showing {n_display} of {reactivity.shape[0]})"
-    fig.update_layout(
-        title=title,
-        xaxis_title="Position",
-        yaxis_title="Sequence",
-        template="plotly_white",
-        height=max(400, min(50 * n_display, 800)),
-        margin=dict(l=50, r=20, t=40, b=40),
-    )
-    return fig
-
-
-def _build_reactivity_plot(
-    reactivity: np.ndarray,
-    names: list[str],
-) -> go.Figure:
-    """Build the main reactivity plot: line plot for 1 sequence, heatmap for many."""
-    if reactivity.shape[0] == 1:
-        return _build_single_profile_plot(reactivity[0], names[0], names[0])
-    return _build_reactivity_heatmap(reactivity, names)
-
-
-_HEATMAP_NTS = ["A", "C", "G", "U"]
-_HEATMAP_MODS = ["A", "C", "G", "U", "del", "ins", "term"]
-
-
-def _build_mod_heatmap(h5_path: str, group_name: str) -> go.Figure | None:
-    """Build the 4x7 modification heatmap from the output HDF5 file.
-
-    Returns None if the heatmap dataset is not present.
-    """
-    with h5py.File(h5_path, "r") as f:
-        grp = f[group_name] if group_name in f else f
-        if "heatmap" not in grp:
-            return None
-        heatmap = np.array(grp["heatmap"])
-
-    # Log-transform to match cmuts normalize (LogNorm vmin=1e-4, vmax=1e0)
-    heatmap_log = np.where(heatmap > 0, np.log10(heatmap), np.nan)
-
-    # Build hover text with descriptive labels
-    hover_text = []
-    for i, nt in enumerate(_HEATMAP_NTS):
-        row = []
-        for j, mod in enumerate(_HEATMAP_MODS):
-            val = heatmap[i, j]
-            prob = f"{val:.4e}" if val > 0 else "0"
-            if mod in ("A", "C", "G", "U") and mod == nt:
-                row.append(f"Match ({nt})<br>Probability: {prob}")
-            elif mod in ("A", "C", "G", "U"):
-                row.append(f"Mismatch {nt} → {mod}<br>Probability: {prob}")
-            elif mod == "del":
-                row.append(f"Deletion of {nt}<br>Probability: {prob}")
-            elif mod == "ins":
-                row.append(f"Insertion at {nt}<br>Probability: {prob}")
-            else:
-                row.append(f"Termination at {nt}<br>Probability: {prob}")
-        hover_text.append(row)
-
-    fig = go.Figure()
-    fig.add_trace(go.Heatmap(
-        z=heatmap_log,
-        x=_HEATMAP_MODS,
-        y=_HEATMAP_NTS,
-        colorscale="RdPu",
-        zmin=-4,
-        zmax=0,
-        text=hover_text,
-        hoverinfo="text",
-        colorbar=dict(
-            title="Probability",
-            tickvals=[-4, -3, -2, -1, 0],
-            ticktext=["10⁻⁴", "10⁻³", "10⁻²", "10⁻¹", "10⁰"],
-        ),
-    ))
-
-    # Draw thin black outlines around each cell
-    for i in range(len(_HEATMAP_NTS)):
-        for j in range(len(_HEATMAP_MODS)):
-            fig.add_shape(
-                type="rect",
-                x0=j - 0.5, x1=j + 0.5,
-                y0=i - 0.5, y1=i + 0.5,
-                line=dict(color="black", width=1),
-                layer="above",
-            )
-
-    fig.update_layout(
-        title="Modification Heatmap",
-        xaxis_title="Modification Type",
-        xaxis=dict(
-            showgrid=False, zeroline=False,
-            constrain="domain",
-        ),
-        yaxis_title="Reference Nucleotide",
-        yaxis=dict(
-            autorange="reversed",
-            showgrid=False, zeroline=False,
-            ticklabelstandoff=10,
-            scaleanchor="x",
-            constrain="domain",
-        ),
-        template="plotly_white",
-        height=300,
-        width=550,
-        margin=dict(l=50, r=20, t=40, b=40),
-    )
-    return fig
+    return plots
 
 
 def _read_profiles(h5_path: str, group_name: str) -> tuple[np.ndarray, list[str]]:
@@ -463,14 +306,19 @@ def cleanup_old_results() -> None:
                 pass
 
 
+_PLOT_KEYS = [
+    "profile", "mod_heatmap", "termination", "coverage",
+    "read_hist", "cumulative_reads", "snr_scaling", "mi", "correlation",
+]
+
+
 def save_results(
     h5_path: str,
     group_name: str,
-    fig: go.Figure,
+    plots: dict[str, go.Figure | None],
     stats_rows: list[list[str]],
     names: list[str],
     job_id: str | None = None,
-    mod_heatmap: go.Figure | None = None,
 ) -> str:
     """Save pipeline results to persistent storage. Returns the job ID."""
     if job_id is None:
@@ -489,12 +337,11 @@ def save_results(
     with open(os.path.join(job_dir, "meta.json"), "w") as f:
         json.dump(meta, f)
 
-    with open(os.path.join(job_dir, "plot.json"), "w") as f:
-        f.write(fig.to_json())
-
-    if mod_heatmap is not None:
-        with open(os.path.join(job_dir, "mod_heatmap.json"), "w") as f:
-            f.write(mod_heatmap.to_json())
+    for key in _PLOT_KEYS:
+        fig = plots.get(key)
+        if fig is not None:
+            with open(os.path.join(job_dir, f"{key}.json"), "w") as f:
+                f.write(fig.to_json())
 
     return job_id
 
@@ -512,8 +359,12 @@ def _empty_plot() -> go.Figure:
 
 def _progress_yield(result_url: str, log_lines: list[str]) -> tuple:
     """Build the in-progress yield tuple. Single source of truth for the
-    yield shape: (file, plot, dropdown, stats, url, mod_heatmap, log)."""
-    return (None, _empty_plot(), None, None, result_url, None, "\n".join(log_lines))
+    yield shape: (file, profile, dropdown, stats, url,
+    mod_heatmap, termination, coverage, read_hist, cumulative_reads,
+    snr_scaling, mi, correlation, log)."""
+    e = _empty_plot()
+    # file, profile, dropdown, stats, url, then one slot per remaining plot key, then log
+    return (None, e, None, None, result_url) + (None,) * (len(_PLOT_KEYS) - 1) + ("\n".join(log_lines),)
 
 
 def run_pipeline(
@@ -527,8 +378,9 @@ def run_pipeline(
 ):
     """Run the full cmuts pipeline: align -> core -> normalize.
 
-    Yields (output_file, plot, sequence_dropdown_update, stats, result_url,
-            mod_heatmap, log)
+    Yields (output_file, profile, dropdown, stats, url,
+            mod_heatmap, termination, coverage, read_hist, cumulative_reads,
+            snr_scaling, mi, correlation, log)
     so the log updates in real time and the interactive plots appear at the end.
     """
     if fasta_file is None or mod_fastq is None:
@@ -622,43 +474,56 @@ def run_pipeline(
         _check_output_h5(os.path.join(outdir, counts_h5), "cmuts core")
         yield _progress_yield(result_url, log_lines)
 
-        # Step 3: Normalize
+        # Step 3: Normalize (in-process via cmuts Python API)
         log("\n=== Step 3: Normalizing reactivities ===")
         yield _progress_yield(result_url, log_lines)
 
         mod_group = f"alignments/{mod_name}"
         nomod_group = f"alignments/{nomod_name}" if nomod_name else None
-        profiles_h5 = "profiles.h5"
-        norm_cmd = _build_normalize_cmd(
-            counts_h5, profiles_h5, fasta_path,
-            mod_group, group_name, nomod_group, norm_cfg,
+
+        opts = cmuts.Opts(
+            cmuts.DataGroups([mod_group]),
+            cmuts.DataGroups([nomod_group] if nomod_group else None),
+            norm_cfg.blank_cutoff,
+            not norm_cfg.no_insertions,
+            not norm_cfg.no_deletions,
+            norm_cfg.norm_method,
+            (norm_cfg.blank_5p, norm_cfg.blank_3p),
+            (norm_cfg.clip_low, norm_cfg.clip_high),
+            0.05,  # significance level
         )
-        if not run(norm_cmd, cwd=outdir):
-            yield _progress_yield(result_url, log_lines)
-            return
 
-        profiles_path = os.path.join(outdir, profiles_h5)
-        _check_output_h5(profiles_path, "cmuts normalize")
+        counts_path = os.path.join(outdir, counts_h5)
+        with h5py.File(counts_path, "r") as f:
+            mod_data, nomod_data, combined = cmuts.compute_reactivity(
+                f, fasta_path, opts,
+            )
 
+        # Save HDF5 output
         final_name = f"{group_name}-profiles.h5"
         final_path = os.path.join(outdir, final_name)
-        os.rename(profiles_path, final_path)
+        combined.save(group_name, final_path)
+        log("Normalization complete.")
+
+        # Build all plots directly from in-memory ProbingData
+        plots = _build_plots(mod_data, nomod_data, combined, group_name)
 
         reactivity, names = _read_profiles(final_path, group_name)
-        fig = _build_reactivity_plot(reactivity, names)
-        # Only show the sequence dropdown for the single-sequence line plot
         dropdown_update = gr.Dropdown(
             choices=names, value=names[0],
-            visible=(reactivity.shape[0] > 1),
+            visible=(len(names) > 1),
         )
         stats_md = _build_stats_table(final_path, group_name)
-        mod_heatmap = _build_mod_heatmap(final_path, group_name)
 
-        save_results(final_path, group_name, fig, stats_md, names, job_id=job_id, mod_heatmap=mod_heatmap)
+        save_results(final_path, group_name, plots, stats_md, names, job_id=job_id)
 
         log(f"\nDone. Generated {len(names)} profile(s).")
         log(f"Results available at: {result_url} (expires in {RESULTS_TTL_HOURS}h)")
-        yield final_path, fig, dropdown_update, stats_md, result_url, mod_heatmap, "\n".join(log_lines)
+        yield (
+            final_path, plots["profile"], dropdown_update, stats_md, result_url,
+            *[plots[k] for k in _PLOT_KEYS[1:]],
+            "\n".join(log_lines),
+        )
 
     except subprocess.TimeoutExpired:
         log(f"Pipeline timed out ({PIPELINE_TIMEOUT_SEC // 60} minute limit).")
@@ -738,6 +603,8 @@ def select_profile(
     group_name: str,
 ) -> go.Figure:
     """Switch the displayed profile when the user picks a different sequence."""
+    from cmuts.visualize.plotly import plot_profile
+
     if not output_file or not seq_name:
         return go.Figure()
     group_name = _sanitize_group_name(group_name)
@@ -746,7 +613,10 @@ def select_profile(
         idx = names.index(seq_name)
     except ValueError:
         idx = 0
-    return _build_single_profile_plot(reactivity[idx], names[idx], names[idx])
+    with h5py.File(output_file, "r") as f:
+        grp = f[group_name] if group_name in f else f
+        error = np.array(grp["error"])
+    return plot_profile(reactivity[idx], error[idx], names[idx])
 
 
 def load_example():
@@ -787,35 +657,40 @@ def load_saved_result(job_id: str):
     """Load a previously saved result by job ID."""
     job_id = (job_id or "").strip()
     empty = _empty_plot()
+    n_extra = len(_PLOT_KEYS) - 1  # all plot keys except "profile"
     if not job_id:
-        return empty, None, "", "", empty, ""
+        return (empty, None, "", "") + (None,) * n_extra + ("",)
 
     job_dir = os.path.join(RESULTS_DIR, job_id)
     meta_path = os.path.join(job_dir, "meta.json")
-    plot_path = os.path.join(job_dir, "plot.json")
-    heatmap_path = os.path.join(job_dir, "mod_heatmap.json")
 
     if not os.path.isdir(job_dir):
-        return empty, None, "", (
+        return (empty, None, "", (
             f"Result not found. It may have expired "
             f"(results are kept for {RESULTS_TTL_HOURS} hours)."
-        ), empty, ""
+        )) + (None,) * n_extra + ("",)
 
     with open(meta_path) as f:
         meta = json.load(f)
 
-    with open(plot_path) as f:
-        fig = go.Figure(json.load(f))
-
-    mod_heatmap = empty
-    if os.path.isfile(heatmap_path):
-        with open(heatmap_path) as f:
-            mod_heatmap = go.Figure(json.load(f))
+    loaded: dict[str, go.Figure | None] = {}
+    for key in _PLOT_KEYS:
+        path = os.path.join(job_dir, f"{key}.json")
+        if os.path.isfile(path):
+            with open(path) as f:
+                loaded[key] = go.Figure(json.load(f))
+        else:
+            loaded[key] = None
 
     names = meta.get("names", [])
     dropdown_update = gr.Dropdown(choices=names, value=names[0] if names else None, visible=len(names) > 1)
 
-    return fig, dropdown_update, meta.get("stats_rows", meta.get("stats_md", [])), "", mod_heatmap, ""
+    return (
+        loaded.get("profile", empty), dropdown_update,
+        meta.get("stats_rows", meta.get("stats_md", [])), "",
+        *[loaded.get(k) for k in _PLOT_KEYS[1:]],
+        "",
+    )
 
 
 
@@ -904,9 +779,19 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         output_plot = gr.Plot(label="Reactivity Profile")
         with gr.Row():
             with gr.Column(scale=1):
-                mod_heatmap_plot = gr.Plot(label="Modification Heatmap", visible=True)
+                mod_heatmap_plot = gr.Plot(label="Modification Heatmap")
             with gr.Column(scale=1):
                 pass
+        with gr.Row():
+            termination_plot = gr.Plot(label="Termination by Position")
+            coverage_plot = gr.Plot(label="Coverage by Position")
+        with gr.Row():
+            read_hist_plot = gr.Plot(label="Read Depth Distribution")
+            cumulative_reads_plot = gr.Plot(label="Cumulative Reads")
+        snr_scaling_plot = gr.Plot(label="SNR vs Read Depth")
+        with gr.Row():
+            mi_plot = gr.Plot(label="Mutual Information")
+            correlation_plot = gr.Plot(label="Correlation")
         output_stats = gr.Dataframe(
             label="Summary Statistics",
             headers=["Statistic", "Value"],
@@ -956,7 +841,10 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 norm_cutoff,
                 norm_percentile,
             ],
-            outputs=[output_file, output_plot, seq_dropdown, output_stats, result_url, mod_heatmap_plot, output_log],
+            outputs=[output_file, output_plot, seq_dropdown, output_stats, result_url,
+                     mod_heatmap_plot, termination_plot, coverage_plot,
+                     read_hist_plot, cumulative_reads_plot, snr_scaling_plot,
+                     mi_plot, correlation_plot, output_log],
         )
 
         seq_dropdown.change(
@@ -968,19 +856,29 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         load_btn.click(
             fn=load_saved_result,
             inputs=[prev_job_id],
-            outputs=[output_plot, seq_dropdown, output_stats, load_status, mod_heatmap_plot, output_log],
+            outputs=[output_plot, seq_dropdown, output_stats, load_status,
+                     mod_heatmap_plot, termination_plot, coverage_plot,
+                     read_hist_plot, cumulative_reads_plot, snr_scaling_plot,
+                     mi_plot, correlation_plot, output_log],
         )
+
+    _load_outputs = [
+        output_plot, seq_dropdown, output_stats, load_status,
+        mod_heatmap_plot, termination_plot, coverage_plot,
+        read_hist_plot, cumulative_reads_plot, snr_scaling_plot,
+        mi_plot, correlation_plot, output_log,
+    ]
 
     def _load_from_query(request: gr.Request):
         """Auto-load results when ?job_id= is present in the URL."""
         job_id = (request.query_params.get("job_id") or "").strip()
         if not job_id:
-            return [gr.update()] * 6
+            return [gr.update()] * len(_load_outputs)
         return load_saved_result(job_id)
 
     demo.load(
         fn=_load_from_query,
-        outputs=[output_plot, seq_dropdown, output_stats, load_status, mod_heatmap_plot, output_log],
+        outputs=_load_outputs,
     )
 
     with gr.Tab("About"):
