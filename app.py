@@ -370,7 +370,7 @@ def _progress_yield(result_url: str, log_lines: list[str]) -> tuple:
     mod_heatmap, termination, coverage, read_hist, cumulative_reads,
     snr_scaling, mi, correlation, log)."""
     hidden = gr.update(visible=False, value=None)
-    return (hidden, hidden, None, hidden, hidden) + (hidden,) * (len(_PLOT_KEYS) - 1) + ("\n".join(log_lines),)
+    return (hidden, hidden, None, hidden, gr.update(visible=True, value=result_url)) + (hidden,) * (len(_PLOT_KEYS) - 1) + ("\n".join(log_lines),)
 
 
 def run_pipeline(
