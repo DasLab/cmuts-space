@@ -275,9 +275,9 @@ def _build_plots(
     else:
         plots["correlation"] = None
 
-    if combined.pairs is not None:
-        pairs = np.asarray(combined.pairs)
-        plots["pairwise_coverage"] = plot_pairwise_coverage(pairs.sum(axis=(-1, -2))[0], name)
+    if combined.probability is not None:
+        prob = np.asarray(combined.probability)
+        plots["pairwise_coverage"] = plot_pairwise_coverage(prob[0, :, :, 1, 1], name)
     else:
         plots["pairwise_coverage"] = None
 
@@ -385,7 +385,7 @@ def save_results(
     if job_id is None:
         job_id = uuid.uuid4().hex[:12]
     job_dir = os.path.join(RESULTS_DIR, job_id)
-    os.makedirs(job_dir)
+    os.makedirs(job_dir, exist_ok=True)
 
     shutil.copy(h5_path, os.path.join(job_dir, "profiles.h5"))
 
@@ -468,11 +468,24 @@ def run_pipeline(
 
     group_name = _sanitize_group_name(group_name)
 
-    # Generate job ID and result URL upfront so the link appears immediately
+    # Generate job ID and result URL upfront so the link appears immediately.
+    # Create the job directory now so that if the connection drops mid-run,
+    # the result link still resolves (even if incomplete).
     job_id = uuid.uuid4().hex[:12]
     space_host = os.environ.get("SPACE_HOST", "")
     base = f"https://{space_host}" if space_host else ""
     result_url = f"{base}/results/{job_id}"
+
+    job_dir = os.path.join(RESULTS_DIR, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    meta = {
+        "group_name": group_name,
+        "created_at": time.time(),
+        "names": [],
+        "stats_rows": [],
+    }
+    with open(os.path.join(job_dir, "meta.json"), "w") as f:
+        json.dump(meta, f)
 
     log_lines: list[str] = []
 
