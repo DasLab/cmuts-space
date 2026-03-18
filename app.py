@@ -668,13 +668,13 @@ def load_saved_result(job_id: str):
     hidden = gr.update(visible=False, value=None)
     n_extra = len(_PLOT_KEYS) - 1  # all plot keys except "profile"
     if not job_id:
-        return (hidden, None, hidden, "") + (hidden,) * n_extra + ("",)
+        return (hidden, hidden, hidden, None, hidden, "") + (hidden,) * n_extra + ("",)
 
     job_dir = os.path.join(RESULTS_DIR, job_id)
     meta_path = os.path.join(job_dir, "meta.json")
 
     if not os.path.isdir(job_dir):
-        return (hidden, None, hidden, (
+        return (hidden, hidden, hidden, None, hidden, (
             f"Result not found. It may have expired "
             f"(results are kept for {RESULTS_TTL_HOURS} hours)."
         )) + (hidden,) * n_extra + ("",)
@@ -694,8 +694,19 @@ def load_saved_result(job_id: str):
     names = meta.get("names", [])
     dropdown_update = gr.Dropdown(choices=names, value=names[0] if names else None, visible=len(names) > 1)
 
+    # Build result URL
+    space_host = os.environ.get("SPACE_HOST", "")
+    base = f"https://{space_host}" if space_host else ""
+    result_url = f"{base}/results/{job_id}"
+
+    # HDF5 file path
+    h5_path = os.path.join(job_dir, "profiles.h5")
+    h5_file = gr.update(visible=True, value=h5_path) if os.path.isfile(h5_path) else hidden
+
     stats = meta.get("stats_rows", meta.get("stats_md", []))
     return (
+        gr.update(visible=True, value=result_url),
+        h5_file,
         _plot_update(loaded.get("profile")), dropdown_update,
         gr.update(visible=True, value=stats), "",
         *[_plot_update(loaded.get(k)) for k in _PLOT_KEYS[1:]],
@@ -868,14 +879,16 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         load_btn.click(
             fn=load_saved_result,
             inputs=[prev_job_id],
-            outputs=[output_plot, seq_dropdown, output_stats, load_status,
+            outputs=[result_url, output_file, output_plot, seq_dropdown,
+                     output_stats, load_status,
                      mod_heatmap_plot, termination_plot, coverage_plot,
                      read_hist_plot, cumulative_reads_plot, snr_scaling_plot,
                      mi_plot, correlation_plot, output_log],
         )
 
     _load_outputs = [
-        output_plot, seq_dropdown, output_stats, load_status,
+        result_url, output_file, output_plot, seq_dropdown,
+        output_stats, load_status,
         mod_heatmap_plot, termination_plot, coverage_plot,
         read_hist_plot, cumulative_reads_plot, snr_scaling_plot,
         mi_plot, correlation_plot, output_log,
