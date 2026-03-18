@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir cmake
 
 # Clone and build cmuts at a pinned commit (updated by CI)
-ARG CMUTS_SHA=aefa49c9e6b5c94da45e3b4c42faa1340d9584f9
+ARG CMUTS_SHA=cfc447be42ddd42db87452e4836c88ce7aa170a4
 RUN git clone --recurse-submodules https://github.com/hmblair/cmuts.git /cmuts && \
     cd /cmuts && git checkout $CMUTS_SHA
 WORKDIR /cmuts
