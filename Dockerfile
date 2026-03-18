@@ -23,7 +23,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Debian bookworm ships cmake 3.25, cmuts needs 3.29+
 RUN pip install --no-cache-dir cmake
 
-# Clone and build cmuts at a pinned commit (updated by CI)
+# Clone and build cmuts at a pinned commit.
+# This SHA is automatically updated by the "Sync HF Space" workflow in
+# github.com/hmblair/cmuts on every push to master — do not pin manually.
 ARG CMUTS_SHA=f14726fd5a1b707f5f5e2147c0fc8f5ca13a5b99
 RUN git clone --recurse-submodules https://github.com/hmblair/cmuts.git /cmuts && \
     cd /cmuts && git checkout $CMUTS_SHA
