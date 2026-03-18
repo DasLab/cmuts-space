@@ -55,6 +55,53 @@ _FASTQ_SUFFIXES = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
 
 
 @dataclass
+class ResultUpdate:
+    """Collected Gradio output updates for the results section.
+
+    Every function that populates the results UI returns one of these,
+    avoiding fragile positional tuples.
+    """
+    result_url: object = None
+    output_file: object = None
+    profile_plot: object = None
+    seq_dropdown: object = None
+    stats: object = None
+    load_status: str = ""
+    mod_heatmap: object = None
+    termination: object = None
+    coverage: object = None
+    read_hist: object = None
+    cumulative_reads: object = None
+    snr_scaling: object = None
+    mi: object = None
+    correlation: object = None
+    log: str = ""
+    group_name: object = None
+
+    @classmethod
+    def hidden(cls) -> ResultUpdate:
+        h = gr.update(visible=False, value=None)
+        return cls(
+            result_url=h, output_file=h, profile_plot=h,
+            seq_dropdown=None, stats=h, load_status="",
+            mod_heatmap=h, termination=h, coverage=h,
+            read_hist=h, cumulative_reads=h, snr_scaling=h,
+            mi=h, correlation=h, log="", group_name=gr.update(),
+        )
+
+    def to_tuple(self) -> tuple:
+        return (
+            self.result_url, self.output_file,
+            self.profile_plot, self.seq_dropdown,
+            self.stats, self.load_status,
+            self.mod_heatmap, self.termination, self.coverage,
+            self.read_hist, self.cumulative_reads, self.snr_scaling,
+            self.mi, self.correlation,
+            self.log, self.group_name,
+        )
+
+
+@dataclass
 class AlignConfig:
     trim_5: str = ""
     trim_3: str = ""
@@ -365,12 +412,11 @@ def _plot_update(fig: go.Figure | None):
 
 
 def _progress_yield(result_url: str, log_lines: list[str]) -> tuple:
-    """Build the in-progress yield tuple. Single source of truth for the
-    yield shape: (file, profile, dropdown, stats, url,
-    mod_heatmap, termination, coverage, read_hist, cumulative_reads,
-    snr_scaling, mi, correlation, log)."""
-    hidden = gr.update(visible=False, value=None)
-    return (hidden, hidden, None, hidden, gr.update(visible=True, value=result_url)) + (hidden,) * (len(_PLOT_KEYS) - 1) + ("\n".join(log_lines),)
+    """Build the in-progress yield tuple."""
+    r = ResultUpdate.hidden()
+    r.result_url = gr.update(visible=True, value=result_url)
+    r.log = "\n".join(log_lines)
+    return r.to_tuple()
 
 
 def run_pipeline(
@@ -525,14 +571,23 @@ def run_pipeline(
 
         log(f"\nDone. Generated {len(names)} profile(s).")
         log(f"Results available at: {result_url} (expires in {RESULTS_TTL_HOURS}h)")
-        yield (
-            gr.update(visible=True, value=final_path),
-            _plot_update(plots["profile"]), dropdown_update,
-            gr.update(visible=True, value=stats_md),
-            gr.update(visible=True, value=result_url),
-            *[_plot_update(plots[k]) for k in _PLOT_KEYS[1:]],
-            "\n".join(log_lines),
-        )
+        yield ResultUpdate(
+            result_url=gr.update(visible=True, value=result_url),
+            output_file=gr.update(visible=True, value=final_path),
+            profile_plot=_plot_update(plots["profile"]),
+            seq_dropdown=dropdown_update,
+            stats=gr.update(visible=True, value=stats_md),
+            mod_heatmap=_plot_update(plots["mod_heatmap"]),
+            termination=_plot_update(plots["termination"]),
+            coverage=_plot_update(plots["coverage"]),
+            read_hist=_plot_update(plots["read_hist"]),
+            cumulative_reads=_plot_update(plots["cumulative_reads"]),
+            snr_scaling=_plot_update(plots["snr_scaling"]),
+            mi=_plot_update(plots["mi"]),
+            correlation=_plot_update(plots["correlation"]),
+            log="\n".join(log_lines),
+            group_name=gr.update(),
+        ).to_tuple()
 
     except subprocess.TimeoutExpired:
         log(f"Pipeline timed out ({PIPELINE_TIMEOUT_SEC // 60} minute limit).")
@@ -665,19 +720,19 @@ def load_example():
 def load_saved_result(job_id: str):
     """Load a previously saved result by job ID."""
     job_id = (job_id or "").strip()
-    hidden = gr.update(visible=False, value=None)
-    n_extra = len(_PLOT_KEYS) - 1  # all plot keys except "profile"
     if not job_id:
-        return (hidden, hidden, hidden, None, hidden, "") + (hidden,) * n_extra + ("",)
+        return ResultUpdate.hidden().to_tuple()
 
     job_dir = os.path.join(RESULTS_DIR, job_id)
     meta_path = os.path.join(job_dir, "meta.json")
 
     if not os.path.isdir(job_dir):
-        return (hidden, hidden, hidden, None, hidden, (
+        r = ResultUpdate.hidden()
+        r.load_status = (
             f"Result not found. It may have expired "
             f"(results are kept for {RESULTS_TTL_HOURS} hours)."
-        )) + (hidden,) * n_extra + ("",)
+        )
+        return r.to_tuple()
 
     with open(meta_path) as f:
         meta = json.load(f)
@@ -691,27 +746,31 @@ def load_saved_result(job_id: str):
         else:
             loaded[key] = None
 
+    saved_group = meta.get("group_name", DEFAULT_GROUP_NAME)
     names = meta.get("names", [])
-    dropdown_update = gr.Dropdown(choices=names, value=names[0] if names else None, visible=len(names) > 1)
 
-    # Build result URL
     space_host = os.environ.get("SPACE_HOST", "")
     base = f"https://{space_host}" if space_host else ""
-    result_url = f"{base}/results/{job_id}"
 
-    # HDF5 file path
     h5_path = os.path.join(job_dir, "profiles.h5")
-    h5_file = gr.update(visible=True, value=h5_path) if os.path.isfile(h5_path) else hidden
+    hidden = gr.update(visible=False, value=None)
 
-    stats = meta.get("stats_rows", meta.get("stats_md", []))
-    return (
-        gr.update(visible=True, value=result_url),
-        h5_file,
-        _plot_update(loaded.get("profile")), dropdown_update,
-        gr.update(visible=True, value=stats), "",
-        *[_plot_update(loaded.get(k)) for k in _PLOT_KEYS[1:]],
-        "",
-    )
+    return ResultUpdate(
+        result_url=gr.update(visible=True, value=f"{base}/results/{job_id}"),
+        output_file=gr.update(visible=True, value=h5_path) if os.path.isfile(h5_path) else hidden,
+        profile_plot=_plot_update(loaded.get("profile")),
+        seq_dropdown=gr.Dropdown(choices=names, value=names[0] if names else None, visible=len(names) > 1),
+        stats=gr.update(visible=True, value=meta.get("stats_rows", meta.get("stats_md", []))),
+        mod_heatmap=_plot_update(loaded.get("mod_heatmap")),
+        termination=_plot_update(loaded.get("termination")),
+        coverage=_plot_update(loaded.get("coverage")),
+        read_hist=_plot_update(loaded.get("read_hist")),
+        cumulative_reads=_plot_update(loaded.get("cumulative_reads")),
+        snr_scaling=_plot_update(loaded.get("snr_scaling")),
+        mi=_plot_update(loaded.get("mi")),
+        correlation=_plot_update(loaded.get("correlation")),
+        group_name=saved_group,
+    ).to_tuple()
 
 
 
@@ -835,6 +894,17 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             outputs=[fasta_input, mod_input, nomod_input, group_name],
         )
 
+        # Shared outputs list matching ResultUpdate.to_tuple() field order
+        _result_outputs = [
+            result_url, output_file,
+            output_plot, seq_dropdown,
+            output_stats, load_status,
+            mod_heatmap_plot, termination_plot, coverage_plot,
+            read_hist_plot, cumulative_reads_plot, snr_scaling_plot,
+            mi_plot, correlation_plot,
+            output_log, group_name,
+        ]
+
         run_btn.click(
             fn=_run_pipeline_gradio,
             inputs=[
@@ -865,10 +935,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 norm_cutoff,
                 norm_percentile,
             ],
-            outputs=[output_file, output_plot, seq_dropdown, output_stats, result_url,
-                     mod_heatmap_plot, termination_plot, coverage_plot,
-                     read_hist_plot, cumulative_reads_plot, snr_scaling_plot,
-                     mi_plot, correlation_plot, output_log],
+            outputs=_result_outputs,
         )
 
         seq_dropdown.change(
@@ -880,21 +947,10 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         load_btn.click(
             fn=load_saved_result,
             inputs=[prev_job_id],
-            outputs=[result_url, output_file, output_plot, seq_dropdown,
-                     output_stats, load_status,
-                     mod_heatmap_plot, termination_plot, coverage_plot,
-                     read_hist_plot, cumulative_reads_plot, snr_scaling_plot,
-                     mi_plot, correlation_plot, output_log],
+            outputs=_result_outputs,
         )
 
-    _load_outputs = [
-        input_section,
-        result_url, output_file, output_plot, seq_dropdown,
-        output_stats, load_status,
-        mod_heatmap_plot, termination_plot, coverage_plot,
-        read_hist_plot, cumulative_reads_plot, snr_scaling_plot,
-        mi_plot, correlation_plot, output_log,
-    ]
+    _load_outputs = [input_section] + _result_outputs
 
     def _load_from_query(request: gr.Request):
         """Auto-load results when ?job_id= is present in the URL."""
