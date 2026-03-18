@@ -780,12 +780,12 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         run_btn = gr.Button("Run Pipeline", variant="primary")
 
         gr.Markdown("### Results")
-        output_file = gr.File(label="Output HDF5", visible=False)
         result_url = gr.Textbox(
             label=f"Result link (bookmark this — expires in {RESULTS_TTL_HOURS}h)",
             interactive=False,
             visible=False,
         )
+        output_file = gr.File(label="Output HDF5", visible=False)
         seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
         output_plot = gr.Plot(label="Reactivity Profile", visible=False)
         with gr.Row():
