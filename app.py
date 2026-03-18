@@ -370,7 +370,7 @@ def _progress_yield(result_url: str, log_lines: list[str]) -> tuple:
     mod_heatmap, termination, coverage, read_hist, cumulative_reads,
     snr_scaling, mi, correlation, log)."""
     hidden = gr.update(visible=False, value=None)
-    return (None, hidden, None, None, result_url) + (hidden,) * (len(_PLOT_KEYS) - 1) + ("\n".join(log_lines),)
+    return (hidden, hidden, None, hidden, hidden) + (hidden,) * (len(_PLOT_KEYS) - 1) + ("\n".join(log_lines),)
 
 
 def run_pipeline(
@@ -526,7 +526,10 @@ def run_pipeline(
         log(f"\nDone. Generated {len(names)} profile(s).")
         log(f"Results available at: {result_url} (expires in {RESULTS_TTL_HOURS}h)")
         yield (
-            final_path, _plot_update(plots["profile"]), dropdown_update, stats_md, result_url,
+            gr.update(visible=True, value=final_path),
+            _plot_update(plots["profile"]), dropdown_update,
+            gr.update(visible=True, value=stats_md),
+            gr.update(visible=True, value=result_url),
             *[_plot_update(plots[k]) for k in _PLOT_KEYS[1:]],
             "\n".join(log_lines),
         )
@@ -665,13 +668,13 @@ def load_saved_result(job_id: str):
     hidden = gr.update(visible=False, value=None)
     n_extra = len(_PLOT_KEYS) - 1  # all plot keys except "profile"
     if not job_id:
-        return (hidden, None, "", "") + (hidden,) * n_extra + ("",)
+        return (hidden, None, hidden, "") + (hidden,) * n_extra + ("",)
 
     job_dir = os.path.join(RESULTS_DIR, job_id)
     meta_path = os.path.join(job_dir, "meta.json")
 
     if not os.path.isdir(job_dir):
-        return (hidden, None, "", (
+        return (hidden, None, hidden, (
             f"Result not found. It may have expired "
             f"(results are kept for {RESULTS_TTL_HOURS} hours)."
         )) + (hidden,) * n_extra + ("",)
@@ -691,9 +694,10 @@ def load_saved_result(job_id: str):
     names = meta.get("names", [])
     dropdown_update = gr.Dropdown(choices=names, value=names[0] if names else None, visible=len(names) > 1)
 
+    stats = meta.get("stats_rows", meta.get("stats_md", []))
     return (
         _plot_update(loaded.get("profile")), dropdown_update,
-        meta.get("stats_rows", meta.get("stats_md", [])), "",
+        gr.update(visible=True, value=stats), "",
         *[_plot_update(loaded.get(k)) for k in _PLOT_KEYS[1:]],
         "",
     )
@@ -776,10 +780,11 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         run_btn = gr.Button("Run Pipeline", variant="primary")
 
         gr.Markdown("### Results")
-        output_file = gr.File(label="Output HDF5")
+        output_file = gr.File(label="Output HDF5", visible=False)
         result_url = gr.Textbox(
             label=f"Result link (bookmark this — expires in {RESULTS_TTL_HOURS}h)",
             interactive=False,
+            visible=False,
         )
         seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
         output_plot = gr.Plot(label="Reactivity Profile", visible=False)
@@ -802,6 +807,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             label="Summary Statistics",
             headers=["Statistic", "Value"],
             interactive=False,
+            visible=False,
         )
         with gr.Accordion("Log", open=False):
             output_log = gr.Textbox(label="Log", lines=15, max_lines=30, show_label=False)
