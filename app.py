@@ -738,57 +738,58 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
     )
 
     with gr.Tab("Run"):
-        gr.Markdown("### Input data")
-        with gr.Row():
-            with gr.Column():
-                fasta_input = gr.File(label="Reference FASTA", file_types=[".fasta", ".fa"])
-            with gr.Column():
-                mod_input = gr.File(label="Modified FASTQ (required)", file_types=[".fastq", ".fq", ".gz"])
-            with gr.Column():
-                nomod_input = gr.File(label="Control FASTQ (optional)", file_types=[".fastq", ".fq", ".gz"])
-        with gr.Row():
-            group_name = gr.Textbox(label="Group name", value="experiment", placeholder="e.g. DMS, 2A3", scale=3)
-            example_btn = gr.Button("Load example data", variant="secondary", size="sm", scale=1)
+        with gr.Column() as input_section:
+            gr.Markdown("### Input data")
+            with gr.Row():
+                with gr.Column():
+                    fasta_input = gr.File(label="Reference FASTA", file_types=[".fasta", ".fa"])
+                with gr.Column():
+                    mod_input = gr.File(label="Modified FASTQ (required)", file_types=[".fastq", ".fq", ".gz"])
+                with gr.Column():
+                    nomod_input = gr.File(label="Control FASTQ (optional)", file_types=[".fastq", ".fq", ".gz"])
+            with gr.Row():
+                group_name = gr.Textbox(label="Group name", value="experiment", placeholder="e.g. DMS, 2A3", scale=3)
+                example_btn = gr.Button("Load example data", variant="secondary", size="sm", scale=1)
 
-        gr.Markdown("### Options")
-        with gr.Accordion("Alignment", open=False):
-            with gr.Row():
-                trim_5 = gr.Textbox(label="5' adapter to trim", placeholder="e.g. AGATCGGAAGAG")
-                trim_3 = gr.Textbox(label="3' adapter to trim", placeholder="e.g. AGATCGGAAGAG")
-                local_align = gr.Checkbox(label="Local alignment", value=False)
+            gr.Markdown("### Options")
+            with gr.Accordion("Alignment", open=False):
+                with gr.Row():
+                    trim_5 = gr.Textbox(label="5' adapter to trim", placeholder="e.g. AGATCGGAAGAG")
+                    trim_3 = gr.Textbox(label="3' adapter to trim", placeholder="e.g. AGATCGGAAGAG")
+                    local_align = gr.Checkbox(label="Local alignment", value=False)
 
-        with gr.Accordion("Read filtering", open=False):
-            with gr.Row():
-                min_mapq = gr.Slider(minimum=0, maximum=60, step=1, value=10, label="Min mapping quality")
-                min_phred = gr.Slider(minimum=0, maximum=40, step=1, value=10, label="Min PHRED score")
-            with gr.Row():
-                min_length = gr.Number(value=2, label="Min read length", precision=0)
-                max_length = gr.Number(value=1024, label="Max read length", precision=0)
-            with gr.Row():
-                no_mismatches = gr.Checkbox(label="Exclude mismatches", value=False)
-                strand = gr.Radio(choices=["both", "forward", "reverse"], value="both", label="Strand")
+            with gr.Accordion("Read filtering", open=False):
+                with gr.Row():
+                    min_mapq = gr.Slider(minimum=0, maximum=60, step=1, value=10, label="Min mapping quality")
+                    min_phred = gr.Slider(minimum=0, maximum=40, step=1, value=10, label="Min PHRED score")
+                with gr.Row():
+                    min_length = gr.Number(value=2, label="Min read length", precision=0)
+                    max_length = gr.Number(value=1024, label="Max read length", precision=0)
+                with gr.Row():
+                    no_mismatches = gr.Checkbox(label="Exclude mismatches", value=False)
+                    strand = gr.Radio(choices=["both", "forward", "reverse"], value="both", label="Strand")
 
-        with gr.Accordion("Normalization", open=False):
-            norm_method = gr.Radio(
-                choices=["ubr", "outlier", "raw"],
-                value="ubr",
-                label="Normalization method",
-            )
-            with gr.Row():
-                no_insertions = gr.Checkbox(label="Exclude insertions", value=True)
-                no_deletions = gr.Checkbox(label="Exclude deletions", value=False)
-            with gr.Row():
-                clip_low = gr.Checkbox(label="Clip negative reactivities", value=False)
-                clip_high = gr.Checkbox(label="Clip reactivities above 1", value=False)
-            with gr.Row():
-                blank_5p = gr.Number(value=0, label="Blank 5' bases", precision=0)
-                blank_3p = gr.Number(value=0, label="Blank 3' bases", precision=0)
-                blank_cutoff = gr.Number(value=10, label="Min reads for position", precision=0)
-            with gr.Row():
-                norm_cutoff = gr.Number(value=500, label="Min reads for normalization", precision=0)
-                norm_percentile = gr.Slider(minimum=50, maximum=100, step=1, value=90, label="Normalization percentile")
+            with gr.Accordion("Normalization", open=False):
+                norm_method = gr.Radio(
+                    choices=["ubr", "outlier", "raw"],
+                    value="ubr",
+                    label="Normalization method",
+                )
+                with gr.Row():
+                    no_insertions = gr.Checkbox(label="Exclude insertions", value=True)
+                    no_deletions = gr.Checkbox(label="Exclude deletions", value=False)
+                with gr.Row():
+                    clip_low = gr.Checkbox(label="Clip negative reactivities", value=False)
+                    clip_high = gr.Checkbox(label="Clip reactivities above 1", value=False)
+                with gr.Row():
+                    blank_5p = gr.Number(value=0, label="Blank 5' bases", precision=0)
+                    blank_3p = gr.Number(value=0, label="Blank 3' bases", precision=0)
+                    blank_cutoff = gr.Number(value=10, label="Min reads for position", precision=0)
+                with gr.Row():
+                    norm_cutoff = gr.Number(value=500, label="Min reads for normalization", precision=0)
+                    norm_percentile = gr.Slider(minimum=50, maximum=100, step=1, value=90, label="Normalization percentile")
 
-        run_btn = gr.Button("Run Pipeline", variant="primary")
+            run_btn = gr.Button("Run Pipeline", variant="primary")
 
         gr.Markdown("### Results")
         result_url = gr.Textbox(
@@ -887,6 +888,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         )
 
     _load_outputs = [
+        input_section,
         result_url, output_file, output_plot, seq_dropdown,
         output_stats, load_status,
         mod_heatmap_plot, termination_plot, coverage_plot,
@@ -899,7 +901,8 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         job_id = (request.query_params.get("job_id") or "").strip()
         if not job_id:
             return [gr.update()] * len(_load_outputs)
-        return load_saved_result(job_id)
+        result = load_saved_result(job_id)
+        return (gr.update(visible=False),) + result
 
     demo.load(
         fn=_load_from_query,
