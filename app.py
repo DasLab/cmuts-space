@@ -888,7 +888,7 @@ def select_profile(seq_name: str, output_file: str) -> tuple:
     return profile_fig, _plot_update(mi_fig), _plot_update(corr_fig), _plot_update(None)
 
 
-def load_example(current_version: int):
+def load_example():
     """Load bundled example files into a single group, replacing any current state."""
     fasta = None
     treated = None
@@ -912,9 +912,7 @@ def load_example(current_version: int):
         group_name = "example"
 
     groups = [{"name": group_name, "mod": treated, "nomod": untreated}]
-    # Bump render_version so @gr.render fires and the new state is reflected
-    # in the displayed components — without this, the state updates silently.
-    return fasta, 1, groups, current_version + 1
+    return fasta, groups
 
 
 def load_saved_result(job_id: str):
@@ -1006,97 +1004,68 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             gr.Markdown("### Input data")
             fasta_input = gr.File(label="Reference FASTA", file_types=[".fasta", ".fa"])
 
-            # Three states track the groups:
-            #   n_groups_state — count, triggers re-render when it changes
-            #   groups_data_state — current name/mod/nomod values, updated in
-            #     the background by component change handlers WITHOUT re-render
-            #   render_version — a counter bumped by handlers (e.g. load_example)
-            #     that need to force a re-render even when n_groups_state is
-            #     unchanged. Without this, state updates are silently invisible.
-            n_groups_state = gr.State(1)
-            groups_data_state = gr.State([
-                {"name": "", "mod": None, "nomod": None}
-            ])
-            render_version = gr.State(0)
+            # The list of groups is the single source of truth. @gr.render
+            # re-runs whenever this state changes; the `key=` on each
+            # component below tells Gradio to reconcile (reuse) the same
+            # DOM element across re-renders, so typing keeps focus and the
+            # textbox value is preserved on every state update.
+            EMPTY_GROUP = {"name": "", "mod": None, "nomod": None}
+            groups_state = gr.State([dict(EMPTY_GROUP)])
 
-            @gr.render(
-                inputs=[n_groups_state, groups_data_state],
-                triggers=[demo.load, n_groups_state.change, render_version.change],
-            )
-            def _render_groups(n: int, data: list) -> None:
-                # Only render the currently active groups — keeps the DOM
-                # light (no hidden gr.File widgets) so the page stays
-                # responsive even with several groups.
-                n = int(n)
-                while len(data) < n:
-                    data.append({"name": "", "mod": None, "nomod": None})
-
-                for i in range(n):
-                    d = data[i]
+            @gr.render(inputs=groups_state)
+            def _render_groups(groups: list) -> None:
+                for i, group in enumerate(groups):
                     with gr.Row():
                         gn = gr.Textbox(
                             label=f"Group {i + 1} name",
-                            value=d.get("name", ""),
+                            value=group.get("name", ""),
                             placeholder="e.g. 2A3_with_cdiGMP",
                             scale=1,
+                            key=f"group_{i}_name",
                         )
                         mod = gr.File(
                             label=f"Group {i + 1} Modified FASTQ (required)",
-                            value=d.get("mod"),
+                            value=group.get("mod"),
                             file_types=[".fastq", ".fq", ".gz"],
                             scale=2,
+                            key=f"group_{i}_mod",
                         )
                         nomod = gr.File(
                             label=f"Group {i + 1} Control FASTQ (optional)",
-                            value=d.get("nomod"),
+                            value=group.get("nomod"),
                             file_types=[".fastq", ".fq", ".gz"],
                             scale=2,
+                            key=f"group_{i}_nomod",
                         )
 
-                    def _make_setter(idx: int, field: str):
-                        def setter(value, current):
+                    def _setter(field: str, idx: int = i):
+                        def update(value, current):
                             current = list(current)
-                            while len(current) <= idx:
-                                current.append({"name": "", "mod": None, "nomod": None})
                             current[idx] = {**current[idx], field: value}
                             return current
-                        return setter
+                        return update
 
-                    # change events update groups_data_state in the
-                    # background. Since the @gr.render trigger is only
-                    # n_groups_state.change, these updates do NOT cause a
-                    # re-render — typing keeps focus.
-                    gn.change(_make_setter(i, "name"), inputs=[gn, groups_data_state], outputs=[groups_data_state])
-                    mod.change(_make_setter(i, "mod"), inputs=[mod, groups_data_state], outputs=[groups_data_state])
-                    nomod.change(_make_setter(i, "nomod"), inputs=[nomod, groups_data_state], outputs=[groups_data_state])
+                    gn.change(_setter("name"), inputs=[gn, groups_state], outputs=[groups_state])
+                    mod.change(_setter("mod"), inputs=[mod, groups_state], outputs=[groups_state])
+                    nomod.change(_setter("nomod"), inputs=[nomod, groups_state], outputs=[groups_state])
 
             with gr.Row():
                 add_group_btn = gr.Button("+ Add group", variant="secondary", size="sm")
                 remove_group_btn = gr.Button("- Remove last group", variant="secondary", size="sm")
                 example_btn = gr.Button("Load example data", variant="secondary", size="sm")
 
-            def _add_group(n, data):
-                n_new = min(int(n) + 1, MAX_GROUPS)
-                data = list(data)
-                while len(data) < n_new:
-                    data.append({"name": "", "mod": None, "nomod": None})
-                return n_new, data
+            def _add_group(groups):
+                if len(groups) >= MAX_GROUPS:
+                    return groups
+                return list(groups) + [dict(EMPTY_GROUP)]
 
-            def _remove_group(n, data):
-                n_new = max(int(n) - 1, 1)
-                data = list(data)[:n_new]
-                return n_new, data
+            def _remove_group(groups):
+                if len(groups) <= 1:
+                    return groups
+                return list(groups)[:-1]
 
-            add_group_btn.click(
-                fn=_add_group,
-                inputs=[n_groups_state, groups_data_state],
-                outputs=[n_groups_state, groups_data_state],
-            )
-            remove_group_btn.click(
-                fn=_remove_group,
-                inputs=[n_groups_state, groups_data_state],
-                outputs=[n_groups_state, groups_data_state],
-            )
+            add_group_btn.click(_add_group, inputs=[groups_state], outputs=[groups_state])
+            remove_group_btn.click(_remove_group, inputs=[groups_state], outputs=[groups_state])
 
             gr.Markdown("### Options")
             with gr.Accordion("Alignment", open=False):
@@ -1197,8 +1166,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
         example_btn.click(
             fn=load_example,
-            inputs=[render_version],
-            outputs=[fasta_input, n_groups_state, groups_data_state, render_version],
+            outputs=[fasta_input, groups_state],
         )
 
         # Shared outputs list matching ResultUpdate.to_tuple() field order
@@ -1216,7 +1184,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             fn=_run_pipeline_gradio,
             inputs=[
                 fasta_input,
-                groups_data_state,
+                groups_state,
                 # Config options
                 norm_method,
                 no_insertions,
