@@ -886,8 +886,17 @@ def run_pipeline(
 # --- Gradio callbacks ---
 
 
-def _run_pipeline_gradio(fasta_file, cif_file, groups_data, *cfg):
-    """Gradio-facing wrapper: builds structured inputs from the groups state."""
+_CFG_COUNT = 21  # number of trailing config args from the run handler inputs
+
+
+def _run_pipeline_gradio(fasta_file, cif_file, *args):
+    """Gradio-facing wrapper. The number of group fields is variable (3 per
+    group); the trailing _CFG_COUNT args are the option components."""
+    cfg = args[-_CFG_COUNT:]
+    group_args = args[:-_CFG_COUNT]
+    if len(group_args) % 3 != 0:
+        raise ValueError(f"Got {len(group_args)} group args, expected a multiple of 3.")
+
     (norm_method, no_insertions, no_deletions, clip_low, clip_high,
      trim_5, trim_3, local_align,
      min_mapq, min_phred, min_length, max_length, no_mismatches, strand,
@@ -895,12 +904,14 @@ def _run_pipeline_gradio(fasta_file, cif_file, groups_data, *cfg):
      compute_pairwise, sig) = cfg
 
     groups: list[GroupInput] = []
-    for i, d in enumerate(groups_data or []):
-        mod = d.get("mod")
-        if mod is None:
+    for i in range(len(group_args) // 3):
+        name_val = group_args[3 * i]
+        mod_val = group_args[3 * i + 1]
+        nomod_val = group_args[3 * i + 2]
+        if mod_val is None:
             continue
-        gn = _sanitize_group_name(d.get("name")) or f"group_{i + 1}"
-        groups.append(GroupInput(gn, mod, d.get("nomod")))
+        gn = _sanitize_group_name(name_val) or f"group_{i + 1}"
+        groups.append(GroupInput(gn, mod_val, nomod_val))
 
     yield from run_pipeline(
         fasta_file=fasta_file,
@@ -1000,8 +1011,12 @@ def select_profile(seq_name: str, output_file: str) -> tuple:
     return profile_fig, _plot_update(mi_fig), _plot_update(corr_fig), _plot_update(None)
 
 
-def load_example():
-    """Load bundled example files into a single group, replacing any current state."""
+def load_example(current_version: int):
+    """Load bundled example files into a single group, replacing any current state.
+
+    Bumps the render version so existing components are *recreated* (not just
+    reconciled) — that's what makes the new values actually appear in the UI.
+    """
     fasta = None
     treated = None
     untreated = None
@@ -1023,8 +1038,9 @@ def load_example():
     else:
         group_name = "example"
 
-    groups = [{"name": group_name, "mod": treated, "nomod": untreated}]
-    return fasta, groups
+    initial = [{"name": group_name, "mod": treated, "nomod": untreated}]
+    # outputs: fasta_input, n_groups_state, initial_values_state, render_version_state
+    return fasta, 1, initial, int(current_version) + 1
 
 
 def load_saved_result(job_id: str):
@@ -1138,68 +1154,107 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 file_types=[".cif"],
             )
 
-            # The list of groups is the single source of truth. @gr.render
-            # re-runs whenever this state changes; the `key=` on each
-            # component below tells Gradio to reconcile (reuse) the same
-            # DOM element across re-renders, so typing keeps focus and the
-            # textbox value is preserved on every state update.
+            # Canonical Gradio @gr.render usage:
+            #   - inputs are *triggers*: changing them re-renders. We keep
+            #     them coarse (count + initial values + key version) so user
+            #     typing/uploading does NOT re-render. Component values live
+            #     in the components, preserved across re-renders by `key=`.
+            #   - the run-button click is registered INSIDE @gr.render so it
+            #     has references to the currently-rendered components. Each
+            #     re-render replaces the old run wiring with a fresh one.
+            #
+            # Three states:
+            #   - n_groups_state:       drives Add/Remove. Existing components
+            #                           are reconciled by key on re-render, so
+            #                           their typed/uploaded values persist.
+            #   - initial_values_state: values used to populate components
+            #                           when their key first appears.
+            #   - render_version_state: bumped when we want to FORCE recreate
+            #                           every group (Load Example replacing
+            #                           values). Version is part of the key,
+            #                           so changing it makes every key new.
             EMPTY_GROUP = {"name": "", "mod": None, "nomod": None}
-            groups_state = gr.State([dict(EMPTY_GROUP)])
+            n_groups_state = gr.State(1)
+            initial_values_state = gr.State([dict(EMPTY_GROUP)])
+            render_version_state = gr.State(0)
 
-            @gr.render(inputs=groups_state)
-            def _render_groups(groups: list) -> None:
-                for i, group in enumerate(groups):
+            @gr.render(inputs=[n_groups_state, initial_values_state, render_version_state])
+            def _render_groups(n: int, initial: list, version: int) -> None:
+                n = int(n)
+                while len(initial) < n:
+                    initial.append(dict(EMPTY_GROUP))
+
+                triples: list[tuple] = []
+                for i in range(n):
+                    d = initial[i]
                     with gr.Row():
                         gn = gr.Textbox(
                             label=f"Group {i + 1} name",
-                            value=group.get("name", ""),
+                            value=d.get("name", ""),
                             placeholder="e.g. 2A3_with_cdiGMP",
                             scale=1,
-                            key=f"group_{i}_name",
+                            key=f"v{version}_g{i}_name",
                         )
                         mod = gr.File(
                             label=f"Group {i + 1} Modified FASTQ (required)",
-                            value=group.get("mod"),
+                            value=d.get("mod"),
                             file_types=[".fastq", ".fq", ".gz"],
                             scale=2,
-                            key=f"group_{i}_mod",
+                            key=f"v{version}_g{i}_mod",
                         )
                         nomod = gr.File(
                             label=f"Group {i + 1} Control FASTQ (optional)",
-                            value=group.get("nomod"),
+                            value=d.get("nomod"),
                             file_types=[".fastq", ".fq", ".gz"],
                             scale=2,
-                            key=f"group_{i}_nomod",
+                            key=f"v{version}_g{i}_nomod",
                         )
+                    triples.append((gn, mod, nomod))
 
-                    def _setter(field: str, idx: int = i):
-                        def update(value, current):
-                            current = list(current)
-                            current[idx] = {**current[idx], field: value}
-                            return current
-                        return update
-
-                    gn.change(_setter("name"), inputs=[gn, groups_state], outputs=[groups_state])
-                    mod.change(_setter("mod"), inputs=[mod, groups_state], outputs=[groups_state])
-                    nomod.change(_setter("nomod"), inputs=[nomod, groups_state], outputs=[groups_state])
+                # Wire Run inside the render — current components are inputs.
+                # Re-renders replace this registration with a fresh one.
+                run_inputs: list = [fasta_input, cif_input]
+                for gn_c, mod_c, nomod_c in triples:
+                    run_inputs.extend([gn_c, mod_c, nomod_c])
+                run_inputs.extend([
+                    norm_method, no_insertions, no_deletions, clip_low, clip_high,
+                    trim_5, trim_3, local_align,
+                    min_mapq, min_phred, min_length, max_length, no_mismatches, strand,
+                    blank_5p, blank_3p, blank_cutoff, norm_cutoff, norm_percentile,
+                    compute_pairwise, sig,
+                ])
+                run_btn.click(
+                    fn=_run_pipeline_gradio,
+                    inputs=run_inputs,
+                    outputs=_result_outputs,
+                )
 
             with gr.Row():
                 add_group_btn = gr.Button("+ Add group", variant="secondary", size="sm")
                 remove_group_btn = gr.Button("- Remove last group", variant="secondary", size="sm")
                 example_btn = gr.Button("Load example data", variant="secondary", size="sm")
 
-            def _add_group(groups):
-                if len(groups) >= MAX_GROUPS:
-                    return groups
-                return list(groups) + [dict(EMPTY_GROUP)]
+            def _add_group(n, initial):
+                n_new = min(int(n) + 1, MAX_GROUPS)
+                initial = list(initial)
+                while len(initial) < n_new:
+                    initial.append(dict(EMPTY_GROUP))
+                return n_new, initial
 
-            def _remove_group(groups):
-                if len(groups) <= 1:
-                    return groups
-                return list(groups)[:-1]
+            def _remove_group(n, initial):
+                n_new = max(int(n) - 1, 1)
+                return n_new, list(initial)[:n_new]
 
-            add_group_btn.click(_add_group, inputs=[groups_state], outputs=[groups_state])
-            remove_group_btn.click(_remove_group, inputs=[groups_state], outputs=[groups_state])
+            add_group_btn.click(
+                _add_group,
+                inputs=[n_groups_state, initial_values_state],
+                outputs=[n_groups_state, initial_values_state],
+            )
+            remove_group_btn.click(
+                _remove_group,
+                inputs=[n_groups_state, initial_values_state],
+                outputs=[n_groups_state, initial_values_state],
+            )
 
             gr.Markdown("### Options")
             with gr.Accordion("Alignment", open=False):
@@ -1303,10 +1358,12 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
         example_btn.click(
             fn=load_example,
-            outputs=[fasta_input, groups_state],
+            inputs=[render_version_state],
+            outputs=[fasta_input, n_groups_state, initial_values_state, render_version_state],
         )
 
-        # Shared outputs list matching ResultUpdate.to_tuple() field order
+        # Shared outputs list matching ResultUpdate.to_tuple() field order.
+        # Referenced from inside @gr.render (above) when wiring run_btn.click.
         _result_outputs = [
             result_url, output_file, csv_file,
             output_plot, seq_dropdown,
@@ -1318,37 +1375,8 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             structure_files, structure_commands,
         ]
 
-        run_btn.click(
-            fn=_run_pipeline_gradio,
-            inputs=[
-                fasta_input,
-                cif_input,
-                groups_state,
-                # Config options
-                norm_method,
-                no_insertions,
-                no_deletions,
-                clip_low,
-                clip_high,
-                trim_5,
-                trim_3,
-                local_align,
-                min_mapq,
-                min_phred,
-                min_length,
-                max_length,
-                no_mismatches,
-                strand,
-                blank_5p,
-                blank_3p,
-                blank_cutoff,
-                norm_cutoff,
-                norm_percentile,
-                compute_pairwise,
-                sig,
-            ],
-            outputs=_result_outputs,
-        )
+        # run_btn.click is wired from inside @gr.render so the dynamically
+        # rendered group components can be inputs.
 
         seq_dropdown.change(
             fn=select_profile,
