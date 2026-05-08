@@ -326,12 +326,14 @@ def _build_plots(
     nomod: cmuts.ProbingData | None,
     combined: cmuts.ProbingData,
     name: str,
+    sequence: str | None = None,
 ) -> dict[str, go.Figure | None]:
     """Build all diagnostic plots from in-memory ProbingData objects."""
     plots: dict[str, go.Figure | None] = {}
 
     plots["profile"] = plot_examples(
         np.asarray(combined.reactivity), np.asarray(combined.error), name,
+        sequence=sequence,
     )
     plots["mod_heatmap"] = plot_heatmap(np.asarray(combined.heatmap), name)
     plots["termination"] = plot_termination(np.asarray(combined.terminations), name)
@@ -698,19 +700,31 @@ def run_pipeline(
         first = results[0]
         first_name = first.group.name
 
+        # Show the nucleotide sequence on the profile x-axis when there's
+        # exactly one reference (multi-ref runs use a heatmap instead).
+        fasta_entries = _parse_fasta(fasta_path)
+        ref_sequence = (
+            fasta_entries[0][1]
+            if first.combined.single() and len(fasta_entries) == 1
+            else None
+        )
+
         # Profile: overlay all groups for single-reference data
         if len(results) > 1 and first.combined.single():
             reactivities = [np.asarray(r.combined.reactivity)[0] for r in results]
-            profile_fig = plot_profiles(reactivities, all_group_names)
+            profile_fig = plot_profiles(reactivities, all_group_names, sequence=ref_sequence)
         else:
             profile_fig = plot_examples(
                 np.asarray(first.combined.reactivity),
                 np.asarray(first.combined.error),
                 first_name,
+                sequence=ref_sequence,
             )
 
         # Diagnostic plots from first group
-        diag_plots = _build_plots(first.mod, first.nomod, first.combined, first_name)
+        diag_plots = _build_plots(
+            first.mod, first.nomod, first.combined, first_name, sequence=ref_sequence,
+        )
         diag_plots["profile"] = profile_fig
 
         # Sequence names for dropdown (shared across groups)
@@ -847,12 +861,14 @@ def select_profile(seq_name: str, output_file: str) -> tuple:
         except ValueError:
             idx = 0
 
+        ref_sequence = sequences[idx] if sequences and idx < len(sequences) else None
+
         if len(group_names) > 1:
             reactivities = [np.array(f[gn]["reactivity"])[idx] for gn in group_names]
-            profile_fig = plot_profiles(reactivities, group_names)
+            profile_fig = plot_profiles(reactivities, group_names, sequence=ref_sequence)
         else:
             error = np.array(first_grp["error"])
-            profile_fig = plot_profile(reactivity[idx], error[idx], names[idx])
+            profile_fig = plot_profile(reactivity[idx], error[idx], names[idx], sequence=ref_sequence)
 
         mi_fig = None
         corr_fig = None
