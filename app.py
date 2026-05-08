@@ -888,7 +888,7 @@ def select_profile(seq_name: str, output_file: str) -> tuple:
     return profile_fig, _plot_update(mi_fig), _plot_update(corr_fig), _plot_update(None)
 
 
-def load_example():
+def load_example(current_version: int):
     """Load bundled example files into a single group, replacing any current state."""
     fasta = None
     treated = None
@@ -912,8 +912,9 @@ def load_example():
         group_name = "example"
 
     groups = [{"name": group_name, "mod": treated, "nomod": untreated}]
-    # Returns: fasta_input, n_groups_state, groups_data_state
-    return fasta, 1, groups
+    # Bump render_version so @gr.render fires and the new state is reflected
+    # in the displayed components — without this, the state updates silently.
+    return fasta, 1, groups, current_version + 1
 
 
 def load_saved_result(job_id: str):
@@ -1005,18 +1006,22 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             gr.Markdown("### Input data")
             fasta_input = gr.File(label="Reference FASTA", file_types=[".fasta", ".fa"])
 
-            # Two states track the groups:
-            #   n_groups_state — count, the only thing that triggers re-render
+            # Three states track the groups:
+            #   n_groups_state — count, triggers re-render when it changes
             #   groups_data_state — current name/mod/nomod values, updated in
-            #   the background by component change handlers without re-rendering
+            #     the background by component change handlers WITHOUT re-render
+            #   render_version — a counter bumped by handlers (e.g. load_example)
+            #     that need to force a re-render even when n_groups_state is
+            #     unchanged. Without this, state updates are silently invisible.
             n_groups_state = gr.State(1)
             groups_data_state = gr.State([
                 {"name": "", "mod": None, "nomod": None}
             ])
+            render_version = gr.State(0)
 
             @gr.render(
                 inputs=[n_groups_state, groups_data_state],
-                triggers=[demo.load, n_groups_state.change],
+                triggers=[demo.load, n_groups_state.change, render_version.change],
             )
             def _render_groups(n: int, data: list) -> None:
                 # Only render the currently active groups — keeps the DOM
@@ -1192,7 +1197,8 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
         example_btn.click(
             fn=load_example,
-            outputs=[fasta_input, n_groups_state, groups_data_state],
+            inputs=[render_version],
+            outputs=[fasta_input, n_groups_state, groups_data_state, render_version],
         )
 
         # Shared outputs list matching ResultUpdate.to_tuple() field order
