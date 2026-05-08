@@ -1011,7 +1011,7 @@ def select_profile(seq_name: str, output_file: str) -> tuple:
     return profile_fig, _plot_update(mi_fig), _plot_update(corr_fig), _plot_update(None)
 
 
-def load_example(current_version: int):
+def load_example(current_cfg: dict):
     """Load bundled example files into a single group, replacing any current state.
 
     Bumps the render version so existing components are *recreated* (not just
@@ -1038,9 +1038,13 @@ def load_example(current_version: int):
     else:
         group_name = "example"
 
-    initial = [{"name": group_name, "mod": treated, "nomod": untreated}]
-    # outputs: fasta_input, n_groups_state, initial_values_state, render_version_state
-    return fasta, 1, initial, int(current_version) + 1
+    new_cfg = {
+        "n": 1,
+        "initial": [{"name": group_name, "mod": treated, "nomod": untreated}],
+        "version": int((current_cfg or {}).get("version", 0)) + 1,
+    }
+    # outputs: fasta_input, groups_cfg_state
+    return fasta, new_cfg
 
 
 def load_saved_result(job_id: str):
@@ -1155,32 +1159,38 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             )
 
             # Canonical Gradio @gr.render usage:
-            #   - inputs are *triggers*: changing them re-renders. We keep
-            #     them coarse (count + initial values + key version) so user
-            #     typing/uploading does NOT re-render. Component values live
-            #     in the components, preserved across re-renders by `key=`.
+            #   - the input is a *trigger*: changing it re-renders. We keep
+            #     it coarse (one dict bundling count + initial values + key
+            #     version) so user typing/uploading does NOT re-render.
+            #     Component values live in the components, preserved across
+            #     re-renders by `key=`.
             #   - the run-button click is registered INSIDE @gr.render so it
             #     has references to the currently-rendered components. Each
-            #     re-render replaces the old run wiring with a fresh one.
+            #     re-render replaces the old wiring with a fresh one.
             #
-            # Three states:
-            #   - n_groups_state:       drives Add/Remove. Existing components
-            #                           are reconciled by key on re-render, so
-            #                           their typed/uploaded values persist.
-            #   - initial_values_state: values used to populate components
-            #                           when their key first appears.
-            #   - render_version_state: bumped when we want to FORCE recreate
-            #                           every group (Load Example replacing
-            #                           values). Version is part of the key,
-            #                           so changing it makes every key new.
+            # The state is a single dict because handlers like Load Example
+            # need to set count + values + version atomically. Three separate
+            # @gr.render inputs would fire the renderer three times in rapid
+            # succession and trip Gradio's DuplicateBlockError when the
+            # second fire tries to mint components whose IDs the first fire
+            # is still holding.
+            #
+            # Fields:
+            #   n:       number of visible groups (Add/Remove change this)
+            #   initial: per-group {name, mod, nomod} used to seed components
+            #            when their key first appears
+            #   version: bumped to force recreation of every group (used by
+            #            Load Example to replace values; the version is part
+            #            of every key, so changing it makes every key new)
             EMPTY_GROUP = {"name": "", "mod": None, "nomod": None}
-            n_groups_state = gr.State(1)
-            initial_values_state = gr.State([dict(EMPTY_GROUP)])
-            render_version_state = gr.State(0)
+            DEFAULT_GROUPS_CFG = {"n": 1, "initial": [dict(EMPTY_GROUP)], "version": 0}
+            groups_cfg_state = gr.State(dict(DEFAULT_GROUPS_CFG))
 
-            @gr.render(inputs=[n_groups_state, initial_values_state, render_version_state])
-            def _render_groups(n: int, initial: list, version: int) -> None:
-                n = int(n)
+            @gr.render(inputs=groups_cfg_state)
+            def _render_groups(cfg: dict) -> None:
+                n = int(cfg.get("n", 1))
+                initial = list(cfg.get("initial") or [])
+                version = int(cfg.get("version", 0))
                 while len(initial) < n:
                     initial.append(dict(EMPTY_GROUP))
 
@@ -1234,26 +1244,31 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 remove_group_btn = gr.Button("- Remove last group", variant="secondary", size="sm")
                 example_btn = gr.Button("Load example data", variant="secondary", size="sm")
 
-            def _add_group(n, initial):
-                n_new = min(int(n) + 1, MAX_GROUPS)
-                initial = list(initial)
-                while len(initial) < n_new:
+            def _add_group(cfg):
+                n = int(cfg.get("n", 1))
+                if n >= MAX_GROUPS:
+                    return cfg
+                initial = list(cfg.get("initial") or [])
+                while len(initial) < n + 1:
                     initial.append(dict(EMPTY_GROUP))
-                return n_new, initial
+                return {**cfg, "n": n + 1, "initial": initial}
 
-            def _remove_group(n, initial):
-                n_new = max(int(n) - 1, 1)
-                return n_new, list(initial)[:n_new]
+            def _remove_group(cfg):
+                n = int(cfg.get("n", 1))
+                if n <= 1:
+                    return cfg
+                initial = list(cfg.get("initial") or [])[: n - 1]
+                return {**cfg, "n": n - 1, "initial": initial}
 
             add_group_btn.click(
                 _add_group,
-                inputs=[n_groups_state, initial_values_state],
-                outputs=[n_groups_state, initial_values_state],
+                inputs=[groups_cfg_state],
+                outputs=[groups_cfg_state],
             )
             remove_group_btn.click(
                 _remove_group,
-                inputs=[n_groups_state, initial_values_state],
-                outputs=[n_groups_state, initial_values_state],
+                inputs=[groups_cfg_state],
+                outputs=[groups_cfg_state],
             )
 
             gr.Markdown("### Options")
@@ -1358,8 +1373,8 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
         example_btn.click(
             fn=load_example,
-            inputs=[render_version_state],
-            outputs=[fasta_input, n_groups_state, initial_values_state, render_version_state],
+            inputs=[groups_cfg_state],
+            outputs=[fasta_input, groups_cfg_state],
         )
 
         # Shared outputs list matching ResultUpdate.to_tuple() field order.
