@@ -840,6 +840,14 @@ def select_profile(seq_name: str, output_file: str) -> tuple:
 
         first_grp = f[group_names[0]]
         reactivity = np.array(first_grp["reactivity"])
+
+        # The dropdown is hidden for single-reference runs; an auto-fired
+        # change here would clobber the initial plot (which already has the
+        # FASTA-derived sequence axis), so leave the existing plot alone.
+        if reactivity.shape[0] == 1:
+            no_change = gr.update()
+            return no_change, no_change, no_change, no_change
+
         sequences = None
         if "sequence" in f:
             sequences = [
@@ -1003,7 +1011,7 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             #   the background by component change handlers without re-rendering
             n_groups_state = gr.State(1)
             groups_data_state = gr.State([
-                {"name": "experiment", "mod": None, "nomod": None}
+                {"name": "", "mod": None, "nomod": None}
             ])
 
             @gr.render(
