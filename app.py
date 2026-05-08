@@ -86,6 +86,8 @@ class ResultUpdate:
     correlation: object = None
     pairwise_coverage: object = None
     log: str = ""
+    structure_files: object = None
+    structure_commands: object = None
 
     @classmethod
     def hidden(cls) -> ResultUpdate:
@@ -97,6 +99,7 @@ class ResultUpdate:
             read_hist=h, cumulative_reads=h, snr_scaling=h,
             mi=h, correlation=h, pairwise_coverage=h,
             log="",
+            structure_files=h, structure_commands=h,
         )
 
     def to_tuple(self) -> tuple:
@@ -108,6 +111,7 @@ class ResultUpdate:
             self.read_hist, self.cumulative_reads, self.snr_scaling,
             self.mi, self.correlation, self.pairwise_coverage,
             self.log,
+            self.structure_files, self.structure_commands,
         )
 
 
@@ -318,6 +322,71 @@ def _generate_csv(
     return csv_path
 
 
+# --- Structure visualization ---
+
+
+def _build_defattrs(
+    cif_path: str,
+    sequence: str,
+    results: list,
+    out_dir: str,
+    chimerax_bin: str = "ChimeraX",
+) -> tuple[list[str], str]:
+    """Generate one defattr per group and the ChimeraX commands to render them.
+
+    Returns (defattr_paths, markdown). ``markdown`` is human-readable text
+    suitable for a gr.Markdown component, with one fenced code block per
+    group containing the command to run locally.
+    """
+    cif_basename = os.path.basename(cif_path)
+    # cmuts aligns sequences in DNA alphabet (it replaces U with T internally
+    # when reading the CIF). Match that here so alignment scores are sensible.
+    aln_seq = sequence.upper().replace("U", "T")
+
+    defattr_paths: list[str] = []
+    blocks: list[str] = [
+        f"### Visualize the structure with ChimeraX",
+        "",
+        f"Download each `.defattr` file below, place it next to your "
+        f"`{cif_basename}` (a copy of your uploaded structure), and run the "
+        f"matching command in ChimeraX's command line.",
+        "",
+    ]
+
+    for r in results:
+        name = r.group.name
+        reactivity = np.asarray(r.combined.reactivity)
+        if reactivity.shape[0] != 1:
+            # Not single-reference — skip; defattrs require a 1:1 sequence map.
+            continue
+        defattr_path = os.path.join(out_dir, f"{name}.defattr")
+        try:
+            max_value = cmuts.visualize.make_defattr(
+                reactivity[0], aln_seq, cif_path, defattr_path,
+            )
+        except Exception as e:
+            blocks.append(f"**{name}:** could not generate defattr — {e}")
+            blocks.append("")
+            continue
+
+        cmd = cmuts.visualize.chimerax_command(
+            cif_basename,
+            os.path.basename(defattr_path),
+            color="indianred",
+            max_value=max_value,
+        )
+        blocks.append(f"**{name}:**")
+        blocks.append("```")
+        blocks.append(f"{chimerax_bin} --cmd '{cmd}'")
+        blocks.append("```")
+        blocks.append("")
+        defattr_paths.append(defattr_path)
+
+    if len(defattr_paths) == 0:
+        return [], ""
+    return defattr_paths, "\n".join(blocks)
+
+
 # --- HDF5 reading and plotting ---
 
 
@@ -470,6 +539,8 @@ def save_results(
     stats_rows: list[list[str]],
     names: list[str],
     job_id: str | None = None,
+    defattr_paths: list[str] | None = None,
+    chimerax_md: str = "",
 ) -> str:
     """Save pipeline results to persistent storage. Returns the job ID."""
     if job_id is None:
@@ -481,11 +552,22 @@ def save_results(
     if csv_path and os.path.isfile(csv_path):
         shutil.copy(csv_path, os.path.join(job_dir, "profiles.csv"))
 
+    saved_defattrs: list[str] = []
+    if defattr_paths:
+        defattr_dir = os.path.join(job_dir, "defattr")
+        os.makedirs(defattr_dir, exist_ok=True)
+        for p in defattr_paths:
+            dest = os.path.join(defattr_dir, os.path.basename(p))
+            shutil.copy(p, dest)
+            saved_defattrs.append(dest)
+
     meta = {
         "group_names": group_names,
         "created_at": time.time(),
         "names": names,
         "stats_rows": stats_rows,
+        "defattr_files": [os.path.basename(p) for p in saved_defattrs],
+        "chimerax_md": chimerax_md,
     }
     with open(os.path.join(job_dir, "meta.json"), "w") as f:
         json.dump(meta, f)
@@ -531,6 +613,7 @@ def run_pipeline(
     align_cfg: AlignConfig,
     core_cfg: CoreConfig,
     norm_cfg: NormConfig,
+    cif_file: str | None = None,
 ):
     """Run the full cmuts pipeline for one or more experiment groups.
 
@@ -737,9 +820,29 @@ def run_pipeline(
         # Stats for all groups
         stats_rows = _build_stats_table(final_path, all_group_names)
 
+        # Optional structure visualization: per-group defattrs + ChimeraX commands
+        defattr_paths: list[str] = []
+        chimerax_md = ""
+        if cif_file is not None and ref_sequence is not None:
+            cif_workdir_path = os.path.join(workdir, os.path.basename(cif_file))
+            shutil.copy(cif_file, cif_workdir_path)
+            defattr_dir = os.path.join(outdir, "defattr")
+            os.makedirs(defattr_dir, exist_ok=True)
+            defattr_paths, chimerax_md = _build_defattrs(
+                cif_workdir_path, ref_sequence, results, defattr_dir,
+            )
+            if defattr_paths:
+                log(f"Wrote {len(defattr_paths)} defattr file(s) for ChimeraX.")
+        elif cif_file is not None:
+            log(
+                "Skipping structure visualization: defattr generation requires "
+                "a single-reference FASTA."
+            )
+
         save_results(
             final_path, csv_path, all_group_names,
             diag_plots, stats_rows, names, job_id=job_id,
+            defattr_paths=defattr_paths, chimerax_md=chimerax_md,
         )
 
         log(f"\nDone. Generated profiles for {len(results)} group(s).")
@@ -761,6 +864,14 @@ def run_pipeline(
             correlation=_plot_update(diag_plots["correlation"]),
             pairwise_coverage=_plot_update(diag_plots["pairwise_coverage"]),
             log="\n".join(log_lines),
+            structure_files=(
+                gr.update(visible=True, value=defattr_paths)
+                if defattr_paths else gr.update(visible=False, value=None)
+            ),
+            structure_commands=(
+                gr.update(visible=True, value=chimerax_md)
+                if chimerax_md else gr.update(visible=False, value="")
+            ),
         ).to_tuple()
 
     except subprocess.TimeoutExpired:
@@ -775,7 +886,7 @@ def run_pipeline(
 # --- Gradio callbacks ---
 
 
-def _run_pipeline_gradio(fasta_file, groups_data, *cfg):
+def _run_pipeline_gradio(fasta_file, cif_file, groups_data, *cfg):
     """Gradio-facing wrapper: builds structured inputs from the groups state."""
     (norm_method, no_insertions, no_deletions, clip_low, clip_high,
      trim_5, trim_3, local_align,
@@ -822,6 +933,7 @@ def _run_pipeline_gradio(fasta_file, groups_data, *cfg):
             norm_percentile=int(norm_percentile or 90),
             sig=float(sig or 0.05),
         ),
+        cif_file=cif_file,
     )
 
 
@@ -957,6 +1069,14 @@ def load_saved_result(job_id: str):
     csv_path = os.path.join(job_dir, "profiles.csv")
     hidden = gr.update(visible=False, value=None)
 
+    defattr_files = meta.get("defattr_files", [])
+    defattr_paths = [
+        os.path.join(job_dir, "defattr", name)
+        for name in defattr_files
+        if os.path.isfile(os.path.join(job_dir, "defattr", name))
+    ]
+    chimerax_md = meta.get("chimerax_md", "")
+
     return ResultUpdate(
         result_url=gr.update(visible=True, value=f"{base}/results/{job_id}"),
         output_file=gr.update(visible=True, value=h5_path) if os.path.isfile(h5_path) else hidden,
@@ -973,6 +1093,12 @@ def load_saved_result(job_id: str):
         mi=_plot_update(loaded.get("mi")),
         correlation=_plot_update(loaded.get("correlation")),
         pairwise_coverage=_plot_update(loaded.get("pairwise_coverage")),
+        structure_files=(
+            gr.update(visible=True, value=defattr_paths) if defattr_paths else hidden
+        ),
+        structure_commands=(
+            gr.update(visible=True, value=chimerax_md) if chimerax_md else hidden
+        ),
     ).to_tuple()
 
 
@@ -1003,6 +1129,14 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
         with gr.Column() as input_section:
             gr.Markdown("### Input data")
             fasta_input = gr.File(label="Reference FASTA", file_types=[".fasta", ".fa"])
+            cif_input = gr.File(
+                label=(
+                    "Reference structure CIF (optional) — produces a "
+                    ".defattr per group plus a ChimeraX command for local "
+                    "visualization. Single-reference FASTAs only."
+                ),
+                file_types=[".cif"],
+            )
 
             # The list of groups is the single source of truth. @gr.render
             # re-runs whenever this state changes; the `key=` on each
@@ -1155,6 +1289,9 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             interactive=False,
             visible=False,
         )
+        structure_files = gr.Files(label="ChimeraX defattr files", visible=False)
+        structure_commands = gr.Markdown(visible=False)
+
         with gr.Accordion("Log", open=False):
             output_log = gr.Textbox(label="Log", lines=15, max_lines=30, show_label=False)
 
@@ -1178,12 +1315,14 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             read_hist_plot, cumulative_reads_plot, snr_scaling_plot,
             mi_plot, correlation_plot, pairwise_coverage_plot,
             output_log,
+            structure_files, structure_commands,
         ]
 
         run_btn.click(
             fn=_run_pipeline_gradio,
             inputs=[
                 fasta_input,
+                cif_input,
                 groups_state,
                 # Config options
                 norm_method,
