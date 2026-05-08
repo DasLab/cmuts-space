@@ -990,7 +990,10 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 {"name": "experiment", "mod": None, "nomod": None}
             ])
 
-            @gr.render(inputs=[n_groups_state, groups_data_state], triggers=[n_groups_state.change])
+            @gr.render(
+                inputs=[n_groups_state, groups_data_state],
+                triggers=[demo.load, n_groups_state.change],
+            )
             def _render_groups(n: int, data: list) -> None:
                 # Only render the currently active groups — keeps the DOM
                 # light (no hidden gr.File widgets) so the page stays
