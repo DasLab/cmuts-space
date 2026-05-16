@@ -69,6 +69,8 @@ class GroupInput:
 @dataclass
 class ResultUpdate:
     """Collected Gradio output updates for the results section."""
+    results_group: object = None
+    error_banner: object = None
     result_url: object = None
     output_file: object = None
     csv_file: object = None
@@ -93,6 +95,8 @@ class ResultUpdate:
     def hidden(cls) -> ResultUpdate:
         h = gr.update(visible=False, value=None)
         return cls(
+            results_group=gr.update(),
+            error_banner=gr.update(visible=False, value=""),
             result_url=h, output_file=h, csv_file=h, profile_plot=h,
             seq_dropdown=None, stats=h, load_status="",
             mod_heatmap=h, termination=h, coverage=h,
@@ -104,6 +108,7 @@ class ResultUpdate:
 
     def to_tuple(self) -> tuple:
         return (
+            self.results_group, self.error_banner,
             self.result_url, self.output_file, self.csv_file,
             self.profile_plot, self.seq_dropdown,
             self.stats, self.load_status,
@@ -345,7 +350,7 @@ def _build_defattrs(
 
     defattr_paths: list[str] = []
     blocks: list[str] = [
-        f"### Visualize the structure with ChimeraX",
+        "### Visualize the structure with ChimeraX",
         "",
         f"Download each `.defattr` file below, place it next to your "
         f"`{cif_basename}` (a copy of your uploaded structure), and run the "
@@ -436,6 +441,29 @@ def _build_plots(
     return plots
 
 
+def _build_seq_names(n: int, sequences: list[str] | None) -> list[str]:
+    """Build display labels for the sequence dropdown, disambiguating
+    duplicates that result from the 50-char truncation."""
+    raw: list[str] = []
+    for i in range(n):
+        seq = sequences[i] if sequences and i < len(sequences) else None
+        if seq and len(seq) > 50:
+            raw.append(seq[:50] + "...")
+        elif seq:
+            raw.append(seq)
+        else:
+            raw.append(f"Sequence {i + 1}")
+    counts: dict[str, int] = {}
+    out: list[str] = []
+    for label in raw:
+        if raw.count(label) > 1:
+            counts[label] = counts.get(label, 0) + 1
+            out.append(f"{label} (#{counts[label]})")
+        else:
+            out.append(label)
+    return out
+
+
 def _read_profiles(h5_path: str, group_name: str) -> tuple[np.ndarray, list[str]]:
     """Read reactivity profiles and sequence names from an HDF5 file."""
     with h5py.File(h5_path, "r") as f:
@@ -446,16 +474,7 @@ def _read_profiles(h5_path: str, group_name: str) -> tuple[np.ndarray, list[str]
             sequences = [
                 s.decode() if isinstance(s, bytes) else s for s in f["sequence"]
             ]
-    names = []
-    for i in range(reactivity.shape[0]):
-        seq = sequences[i] if sequences and i < len(sequences) else None
-        if seq and len(seq) > 50:
-            names.append(seq[:50] + "...")
-        elif seq:
-            names.append(seq)
-        else:
-            names.append(f"Sequence {i + 1}")
-    return reactivity, names
+    return reactivity, _build_seq_names(reactivity.shape[0], sequences)
 
 
 def _build_stats_table(h5_path: str, group_names: list[str]) -> list[list[str]]:
@@ -591,18 +610,19 @@ def _plot_update(fig: go.Figure | None):
     return gr.update(visible=True, value=fig)
 
 
-def _error_yield(msg: str) -> tuple:
-    """Build a yield tuple that displays an error without breaking UI state."""
+def _error_yield(msg: str, log_lines: list[str] | None = None) -> tuple:
+    """Build a yield tuple that displays an error banner and the log."""
     r = ResultUpdate.hidden()
-    r.log = f"Error: {msg}"
-    r.load_status = msg
+    r.results_group = gr.update(visible=True)
+    r.error_banner = gr.update(visible=True, value=f"**Error:** {msg}")
+    r.log = "\n".join(log_lines) if log_lines else f"Error: {msg}"
     return r.to_tuple()
 
 
-def _progress_yield(result_url: str, log_lines: list[str]) -> tuple:
-    """Build the in-progress yield tuple."""
+def _progress_yield(log_lines: list[str]) -> tuple:
+    """Build the in-progress yield tuple. Result URL stays hidden until success."""
     r = ResultUpdate.hidden()
-    r.result_url = gr.update(visible=True, value=result_url)
+    r.results_group = gr.update(visible=True)
     r.log = "\n".join(log_lines)
     return r.to_tuple()
 
@@ -650,17 +670,6 @@ def run_pipeline(
     space_host = os.environ.get("SPACE_HOST", "")
     base = f"https://{space_host}" if space_host else ""
     result_url = f"{base}/results/{job_id}"
-
-    job_dir = os.path.join(RESULTS_DIR, job_id)
-    os.makedirs(job_dir, exist_ok=True)
-    meta = {
-        "group_names": [g.name for g in groups],
-        "created_at": time.time(),
-        "names": [],
-        "stats_rows": [],
-    }
-    with open(os.path.join(job_dir, "meta.json"), "w") as f:
-        json.dump(meta, f)
 
     log_lines: list[str] = []
 
@@ -710,33 +719,33 @@ def run_pipeline(
 
         # Step 1: Align all FASTQs together
         log("=== Step 1: Aligning reads ===")
-        yield _progress_yield(result_url, log_lines)
+        yield _progress_yield(log_lines)
 
         fastq_files = sorted(glob.glob(os.path.join(fastq_dir, "*")))
         alignments_dir = os.path.join(outdir, "alignments")
         align_cmd = _build_align_cmd(fasta_path, alignments_dir, fastq_files, align_cfg)
         if not run(align_cmd, cwd=outdir):
-            yield _progress_yield(result_url, log_lines)
+            yield _error_yield("Alignment failed. See log for details.", log_lines)
             return
-        yield _progress_yield(result_url, log_lines)
+        yield _progress_yield(log_lines)
 
         # Step 2: Count mutations for all BAMs
         log("\n=== Step 2: Counting mutations ===")
-        yield _progress_yield(result_url, log_lines)
+        yield _progress_yield(log_lines)
 
         bam_abs = _check_bam_files(alignments_dir)
         bam_files = sorted(os.path.relpath(p, outdir) for p in bam_abs)
         counts_h5 = "counts.h5"
         core_cmd = _build_core_cmd(fasta_path, counts_h5, bam_files, core_cfg)
         if not run(core_cmd, cwd=outdir):
-            yield _progress_yield(result_url, log_lines)
+            yield _error_yield("Mutation counting failed. See log for details.", log_lines)
             return
         _check_output_h5(os.path.join(outdir, counts_h5), "cmuts core")
-        yield _progress_yield(result_url, log_lines)
+        yield _progress_yield(log_lines)
 
         # Step 3: Normalize reactivities with shared normalization factor
         log("\n=== Step 3: Normalizing reactivities ===")
-        yield _progress_yield(result_url, log_lines)
+        yield _progress_yield(log_lines)
 
         counts_path = os.path.join(outdir, counts_h5)
 
@@ -848,6 +857,8 @@ def run_pipeline(
         log(f"\nDone. Generated profiles for {len(results)} group(s).")
         log(f"Results available at: {result_url} (expires in {RESULTS_TTL_HOURS}h)")
         yield ResultUpdate(
+            results_group=gr.update(visible=True),
+            error_banner=gr.update(visible=False, value=""),
             result_url=gr.update(visible=True, value=result_url),
             output_file=gr.update(visible=True, value=final_path),
             csv_file=gr.update(visible=True, value=csv_path),
@@ -876,26 +887,27 @@ def run_pipeline(
 
     except subprocess.TimeoutExpired:
         log(f"Pipeline timed out ({PIPELINE_TIMEOUT_SEC // 60} minute limit).")
-        yield _progress_yield(result_url, log_lines)
+        yield _error_yield(
+            f"Pipeline timed out after {PIPELINE_TIMEOUT_SEC // 60} minutes.",
+            log_lines,
+        )
+        return
     except Exception as e:
         log(f"Error: {e}")
         log(traceback.format_exc())
-        yield _progress_yield(result_url, log_lines)
+        yield _error_yield(str(e) or "Unexpected error. See log for details.", log_lines)
+        return
 
 
 # --- Gradio callbacks ---
 
 
-_CFG_COUNT = 21  # number of trailing config args from the run handler inputs
-
-
-def _run_pipeline_gradio(fasta_file, cif_file, *args):
-    """Gradio-facing wrapper. The number of group fields is variable (3 per
-    group); the trailing _CFG_COUNT args are the option components."""
-    cfg = args[-_CFG_COUNT:]
-    group_args = args[:-_CFG_COUNT]
-    if len(group_args) % 3 != 0:
-        raise ValueError(f"Got {len(group_args)} group args, expected a multiple of 3.")
+def _run_pipeline_gradio(fasta_file, cif_file, visible_count, *args):
+    """Gradio-facing wrapper. Receives MAX_GROUPS * 3 group values (one
+    (name, mod, nomod) triple per row) followed by the option components.
+    Only the first ``visible_count`` rows are considered."""
+    group_args = args[: MAX_GROUPS * 3]
+    cfg = args[MAX_GROUPS * 3 :]
 
     (norm_method, no_insertions, no_deletions, clip_low, clip_high,
      trim_5, trim_3, local_align,
@@ -904,7 +916,7 @@ def _run_pipeline_gradio(fasta_file, cif_file, *args):
      compute_pairwise, sig) = cfg
 
     groups: list[GroupInput] = []
-    for i in range(len(group_args) // 3):
+    for i in range(int(visible_count or 0)):
         name_val = group_args[3 * i]
         mod_val = group_args[3 * i + 1]
         nomod_val = group_args[3 * i + 2]
@@ -951,15 +963,14 @@ def _run_pipeline_gradio(fasta_file, cif_file, *args):
 def select_profile(seq_name: str, output_file: str) -> tuple:
     """Switch the displayed profile and pairwise plots for the selected sequence."""
     if not output_file or not seq_name:
-        empty = go.Figure()
-        hidden = gr.update(visible=False, value=None)
-        return empty, hidden, hidden, hidden
+        no_change = gr.update()
+        return no_change, no_change, no_change, no_change
 
     with h5py.File(output_file, "r") as f:
         group_names = sorted(k for k in f.keys() if k != "sequence")
         if not group_names:
-            hidden = gr.update(visible=False, value=None)
-            return go.Figure(), hidden, hidden, hidden
+            no_change = gr.update()
+            return no_change, no_change, no_change, no_change
 
         first_grp = f[group_names[0]]
         reactivity = np.array(first_grp["reactivity"])
@@ -977,15 +988,7 @@ def select_profile(seq_name: str, output_file: str) -> tuple:
                 s.decode() if isinstance(s, bytes) else s for s in f["sequence"]
             ]
 
-        names: list[str] = []
-        for i in range(reactivity.shape[0]):
-            seq = sequences[i] if sequences and i < len(sequences) else None
-            if seq and len(seq) > 50:
-                names.append(seq[:50] + "...")
-            elif seq:
-                names.append(seq)
-            else:
-                names.append(f"Sequence {i + 1}")
+        names = _build_seq_names(reactivity.shape[0], sequences)
 
         try:
             idx = names.index(seq_name)
@@ -1008,28 +1011,44 @@ def select_profile(seq_name: str, output_file: str) -> tuple:
         if "covariance" in first_grp:
             corr_fig = plot_correlation(np.array(first_grp["covariance"])[idx], names[idx])
 
-    return profile_fig, _plot_update(mi_fig), _plot_update(corr_fig), _plot_update(None)
+    # Leave the pairwise plot alone — switching sequences shouldn't hide a
+    # plot that may already be visible from the initial run.
+    return profile_fig, _plot_update(mi_fig), _plot_update(corr_fig), gr.update()
 
 
-def load_example(current_cfg: dict):
-    """Load bundled example files into a single group, replacing any current state.
+def load_example():
+    """Load bundled example files into row 0; clear and hide rows 1..MAX_GROUPS-1.
 
-    Bumps the render version so existing components are *recreated* (not just
-    reconciled) — that's what makes the new values actually appear in the UI.
+    Returns a tuple consumed by the example button's outputs list, see
+    ``_example_outputs`` in the UI section.
     """
     fasta = None
     treated = None
     untreated = None
 
-    for f in os.listdir(EXAMPLES_DIR):
+    entries = sorted(os.listdir(EXAMPLES_DIR))
+    fastq_paths: list[str] = []
+    for f in entries:
         path = os.path.join(EXAMPLES_DIR, f)
         lower = f.lower()
         if lower.endswith((".fasta", ".fa")):
             fasta = path
-        elif "untreated" in lower or "nomod" in lower or "control" in lower:
-            untreated = path
-        elif lower.endswith((".fastq", ".fq", ".fastq.gz", ".fq.gz")):
-            treated = path
+        elif lower.endswith(_FASTQ_SUFFIXES):
+            fastq_paths.append(path)
+
+    # First pass: pick control by name keywords.
+    remaining: list[str] = []
+    for p in fastq_paths:
+        lower = os.path.basename(p).lower()
+        if untreated is None and (
+            "untreated" in lower or "nomod" in lower or "control" in lower
+        ):
+            untreated = p
+        else:
+            remaining.append(p)
+    # Second pass: whatever is left is treated.
+    if remaining:
+        treated = remaining[0]
 
     group_file = os.path.join(EXAMPLES_DIR, "group.txt")
     if os.path.isfile(group_file):
@@ -1038,13 +1057,22 @@ def load_example(current_cfg: dict):
     else:
         group_name = "example"
 
-    new_cfg = {
-        "n": 1,
-        "initial": [{"name": group_name, "mod": treated, "nomod": untreated}],
-        "version": int((current_cfg or {}).get("version", 0)) + 1,
-    }
-    # outputs: fasta_input, groups_cfg_state
-    return fasta, new_cfg
+    # Row 0 gets the example values; rows 1..MAX_GROUPS-1 are cleared and hidden.
+    row_values: list = [group_name, treated, untreated]
+    for _ in range(MAX_GROUPS - 1):
+        row_values.extend(["", None, None])
+    row_visibilities = [gr.update(visible=(i == 0)) for i in range(MAX_GROUPS)]
+    add_btn_update = gr.update(interactive=True)
+    remove_btn_update = gr.update(interactive=False)
+
+    return (
+        fasta,
+        *row_values,
+        1,  # visible_count
+        *row_visibilities,
+        add_btn_update,
+        remove_btn_update,
+    )
 
 
 def load_saved_result(job_id: str):
@@ -1098,6 +1126,8 @@ def load_saved_result(job_id: str):
     chimerax_md = meta.get("chimerax_md", "")
 
     return ResultUpdate(
+        results_group=gr.update(visible=True),
+        error_banner=gr.update(visible=False, value=""),
         result_url=gr.update(visible=True, value=f"{base}/results/{job_id}"),
         output_file=gr.update(visible=True, value=h5_path) if os.path.isfile(h5_path) else hidden,
         csv_file=gr.update(visible=True, value=csv_path) if os.path.isfile(csv_path) else hidden,
@@ -1158,118 +1188,48 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 file_types=[".cif"],
             )
 
-            # Canonical Gradio @gr.render usage:
-            #   - the input is a *trigger*: changing it re-renders. We keep
-            #     it coarse (one dict bundling count + initial values + key
-            #     version) so user typing/uploading does NOT re-render.
-            #     Component values live in the components, preserved across
-            #     re-renders by `key=`.
-            #   - the run-button click is registered INSIDE @gr.render so it
-            #     has references to the currently-rendered components. Each
-            #     re-render replaces the old wiring with a fresh one.
-            #
-            # The state is a single dict because handlers like Load Example
-            # need to set count + values + version atomically. Three separate
-            # @gr.render inputs would fire the renderer three times in rapid
-            # succession and trip Gradio's DuplicateBlockError when the
-            # second fire tries to mint components whose IDs the first fire
-            # is still holding.
-            #
-            # Fields:
-            #   n:       number of visible groups (Add/Remove change this)
-            #   initial: per-group {name, mod, nomod} used to seed components
-            #            when their key first appears
-            #   version: bumped to force recreation of every group (used by
-            #            Load Example to replace values; the version is part
-            #            of every key, so changing it makes every key new)
-            EMPTY_GROUP = {"name": "", "mod": None, "nomod": None}
-            DEFAULT_GROUPS_CFG = {"n": 1, "initial": [dict(EMPTY_GROUP)], "version": 0}
-            groups_cfg_state = gr.State(dict(DEFAULT_GROUPS_CFG))
+            # Pre-create MAX_GROUPS static rows. Each row is toggled by
+            # visibility on a shared ``visible_count`` state. Components are
+            # never recreated, so values persist across Add/Remove and are
+            # editable after Load Example without re-render quirks.
+            group_rows: list = []
+            group_names: list = []
+            group_mods: list = []
+            group_nomods: list = []
+            group_removes: list = []
+            for i in range(MAX_GROUPS):
+                with gr.Row(visible=(i == 0)) as _row:
+                    gn = gr.Textbox(
+                        label=f"Group {i + 1} name",
+                        placeholder="e.g. 2A3_with_cdiGMP",
+                        scale=2,
+                    )
+                    mod = gr.File(
+                        label=f"Group {i + 1} Modified FASTQ (required)",
+                        file_types=[".fastq", ".fq", ".gz"],
+                        scale=3,
+                    )
+                    nomod = gr.File(
+                        label=f"Group {i + 1} Control FASTQ (optional)",
+                        file_types=[".fastq", ".fq", ".gz"],
+                        scale=3,
+                    )
+                    rm = gr.Button("Remove", size="sm", scale=1)
+                group_rows.append(_row)
+                group_names.append(gn)
+                group_mods.append(mod)
+                group_nomods.append(nomod)
+                group_removes.append(rm)
 
-            @gr.render(inputs=groups_cfg_state)
-            def _render_groups(cfg: dict) -> None:
-                n = int(cfg.get("n", 1))
-                initial = list(cfg.get("initial") or [])
-                version = int(cfg.get("version", 0))
-                while len(initial) < n:
-                    initial.append(dict(EMPTY_GROUP))
-
-                triples: list[tuple] = []
-                for i in range(n):
-                    d = initial[i]
-                    with gr.Row():
-                        gn = gr.Textbox(
-                            label=f"Group {i + 1} name",
-                            value=d.get("name", ""),
-                            placeholder="e.g. 2A3_with_cdiGMP",
-                            scale=1,
-                            key=f"v{version}_g{i}_name",
-                        )
-                        mod = gr.File(
-                            label=f"Group {i + 1} Modified FASTQ (required)",
-                            value=d.get("mod"),
-                            file_types=[".fastq", ".fq", ".gz"],
-                            scale=2,
-                            key=f"v{version}_g{i}_mod",
-                        )
-                        nomod = gr.File(
-                            label=f"Group {i + 1} Control FASTQ (optional)",
-                            value=d.get("nomod"),
-                            file_types=[".fastq", ".fq", ".gz"],
-                            scale=2,
-                            key=f"v{version}_g{i}_nomod",
-                        )
-                    triples.append((gn, mod, nomod))
-
-                # Wire Run inside the render — current components are inputs.
-                # Re-renders replace this registration with a fresh one.
-                run_inputs: list = [fasta_input, cif_input]
-                for gn_c, mod_c, nomod_c in triples:
-                    run_inputs.extend([gn_c, mod_c, nomod_c])
-                run_inputs.extend([
-                    norm_method, no_insertions, no_deletions, clip_low, clip_high,
-                    trim_5, trim_3, local_align,
-                    min_mapq, min_phred, min_length, max_length, no_mismatches, strand,
-                    blank_5p, blank_3p, blank_cutoff, norm_cutoff, norm_percentile,
-                    compute_pairwise, sig,
-                ])
-                run_btn.click(
-                    fn=_run_pipeline_gradio,
-                    inputs=run_inputs,
-                    outputs=_result_outputs,
-                )
+            visible_count = gr.State(1)
 
             with gr.Row():
                 add_group_btn = gr.Button("+ Add group", variant="secondary", size="sm")
-                remove_group_btn = gr.Button("- Remove last group", variant="secondary", size="sm")
+                remove_group_btn = gr.Button(
+                    "- Remove last group", variant="secondary", size="sm",
+                    interactive=False,
+                )
                 example_btn = gr.Button("Load example data", variant="secondary", size="sm")
-
-            def _add_group(cfg):
-                n = int(cfg.get("n", 1))
-                if n >= MAX_GROUPS:
-                    return cfg
-                initial = list(cfg.get("initial") or [])
-                while len(initial) < n + 1:
-                    initial.append(dict(EMPTY_GROUP))
-                return {**cfg, "n": n + 1, "initial": initial}
-
-            def _remove_group(cfg):
-                n = int(cfg.get("n", 1))
-                if n <= 1:
-                    return cfg
-                initial = list(cfg.get("initial") or [])[: n - 1]
-                return {**cfg, "n": n - 1, "initial": initial}
-
-            add_group_btn.click(
-                _add_group,
-                inputs=[groups_cfg_state],
-                outputs=[groups_cfg_state],
-            )
-            remove_group_btn.click(
-                _remove_group,
-                inputs=[groups_cfg_state],
-                outputs=[groups_cfg_state],
-            )
 
             gr.Markdown("### Options")
             with gr.Accordion("Alignment", open=False):
@@ -1327,43 +1287,40 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
 
             run_btn = gr.Button("Run Pipeline", variant="primary")
 
-        gr.Markdown("### Results")
-        result_url = gr.Textbox(
-            label=f"Result link (bookmark this — expires in {RESULTS_TTL_HOURS}h)",
-            interactive=False,
-            visible=False,
-        )
-        output_file = gr.File(label="Output HDF5", visible=False)
-        csv_file = gr.File(label="Output CSV", visible=False)
-        seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
-        output_plot = gr.Plot(label="Reactivity Profile", visible=False)
-        with gr.Row():
-            with gr.Column(scale=1):
-                mod_heatmap_plot = gr.Plot(label="Modification Heatmap", visible=False)
-            with gr.Column(scale=1):
-                pass
-        with gr.Row():
-            termination_plot = gr.Plot(label="Termination by Position", visible=False)
-            coverage_plot = gr.Plot(label="Coverage by Position", visible=False)
-        with gr.Row():
-            read_hist_plot = gr.Plot(label="Read Depth Distribution", visible=False)
-            cumulative_reads_plot = gr.Plot(label="Cumulative Reads", visible=False)
-        snr_scaling_plot = gr.Plot(label="SNR vs Read Depth", visible=False)
-        with gr.Row():
-            mi_plot = gr.Plot(label="Mutual Information", visible=False)
-            correlation_plot = gr.Plot(label="Correlation", visible=False)
-        pairwise_coverage_plot = gr.Plot(label="Pairwise Coverage", visible=False)
-        output_stats = gr.Dataframe(
-            label="Summary Statistics",
-            headers=["Statistic", "Value"],
-            interactive=False,
-            visible=False,
-        )
-        structure_files = gr.Files(label="ChimeraX defattr files", visible=False)
-        structure_commands = gr.Markdown(visible=False)
-
-        with gr.Accordion("Log", open=False):
-            output_log = gr.Textbox(label="Log", lines=15, max_lines=30, show_label=False)
+        with gr.Group(visible=False) as results_group:
+            gr.Markdown("### Results")
+            error_banner = gr.Markdown(value="", visible=False)
+            result_url = gr.Textbox(
+                label=f"Result link (bookmark this — expires in {RESULTS_TTL_HOURS}h)",
+                interactive=False,
+                visible=False,
+            )
+            with gr.Accordion("Log", open=False):
+                output_log = gr.Textbox(label="Log", lines=15, max_lines=30, show_label=False)
+            output_file = gr.File(label="Output HDF5", visible=False)
+            csv_file = gr.File(label="Output CSV", visible=False)
+            seq_dropdown = gr.Dropdown(label="Sequence", visible=False, interactive=True)
+            output_plot = gr.Plot(label="Reactivity Profile", visible=False)
+            mod_heatmap_plot = gr.Plot(label="Modification Heatmap", visible=False)
+            with gr.Row():
+                termination_plot = gr.Plot(label="Termination by Position", visible=False)
+                coverage_plot = gr.Plot(label="Coverage by Position", visible=False)
+            with gr.Row():
+                read_hist_plot = gr.Plot(label="Read Depth Distribution", visible=False)
+                cumulative_reads_plot = gr.Plot(label="Cumulative Reads", visible=False)
+            snr_scaling_plot = gr.Plot(label="SNR vs Read Depth", visible=False)
+            with gr.Row():
+                mi_plot = gr.Plot(label="Mutual Information", visible=False)
+                correlation_plot = gr.Plot(label="Correlation", visible=False)
+            pairwise_coverage_plot = gr.Plot(label="Pairwise Coverage", visible=False)
+            output_stats = gr.Dataframe(
+                label="Summary Statistics",
+                headers=["Statistic", "Value"],
+                interactive=False,
+                visible=False,
+            )
+            structure_files = gr.Files(label="ChimeraX defattr files", visible=False)
+            structure_commands = gr.Markdown(visible=False)
 
         with gr.Accordion("Load previous results", open=False):
             with gr.Row():
@@ -1371,15 +1328,88 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
                 load_btn = gr.Button("Load", variant="secondary", scale=1)
             load_status = gr.Textbox(label="Status", interactive=False)
 
-        example_btn.click(
-            fn=load_example,
-            inputs=[groups_cfg_state],
-            outputs=[fasta_input, groups_cfg_state],
+        # Flat list of all per-row value components, ordered row by row.
+        group_value_components: list = []
+        for i in range(MAX_GROUPS):
+            group_value_components.extend([group_names[i], group_mods[i], group_nomods[i]])
+
+        # Standard outputs tuple for the group state buttons (Add / Remove
+        # last / per-row Remove). Order: visible_count, all values, all rows,
+        # add button, remove button.
+        _groups_state_outputs = (
+            [visible_count] + group_value_components
+            + group_rows + [add_group_btn, remove_group_btn]
         )
 
-        # Shared outputs list matching ResultUpdate.to_tuple() field order.
-        # Referenced from inside @gr.render (above) when wiring run_btn.click.
+        def _groups_state(vc: int, values) -> tuple:
+            flat = list(values)
+            rows_vis = [gr.update(visible=(k < vc)) for k in range(MAX_GROUPS)]
+            add_int = gr.update(interactive=(vc < MAX_GROUPS))
+            rem_int = gr.update(interactive=(vc > 1))
+            return (vc, *flat, *rows_vis, add_int, rem_int)
+
+        def _add_group_handler(vc, *vals):
+            new_vc = min(int(vc or 1) + 1, MAX_GROUPS)
+            return _groups_state(new_vc, vals)
+
+        def _remove_last_handler(vc, *vals):
+            cur = int(vc or 1)
+            new_vc = max(cur - 1, 1)
+            if new_vc == cur:
+                return _groups_state(cur, vals)
+            triples = [list(vals[3 * k : 3 * k + 3]) for k in range(MAX_GROUPS)]
+            triples[new_vc] = ["", None, None]
+            flat = [v for t in triples for v in t]
+            return _groups_state(new_vc, flat)
+
+        def _make_remove_at(idx: int):
+            def fn(vc, *vals):
+                cur = int(vc or 1)
+                triples = [list(vals[3 * k : 3 * k + 3]) for k in range(MAX_GROUPS)]
+                if idx >= cur:
+                    return _groups_state(cur, vals)
+                if cur <= 1:
+                    triples[0] = ["", None, None]
+                    flat = [v for t in triples for v in t]
+                    return _groups_state(1, flat)
+                for k in range(idx, cur - 1):
+                    triples[k] = triples[k + 1]
+                triples[cur - 1] = ["", None, None]
+                flat = [v for t in triples for v in t]
+                return _groups_state(cur - 1, flat)
+            return fn
+
+        add_group_btn.click(
+            _add_group_handler,
+            inputs=[visible_count] + group_value_components,
+            outputs=_groups_state_outputs,
+        )
+        remove_group_btn.click(
+            _remove_last_handler,
+            inputs=[visible_count] + group_value_components,
+            outputs=_groups_state_outputs,
+        )
+        for i in range(MAX_GROUPS):
+            group_removes[i].click(
+                _make_remove_at(i),
+                inputs=[visible_count] + group_value_components,
+                outputs=_groups_state_outputs,
+            )
+
+        _example_outputs = (
+            [fasta_input] + group_value_components
+            + [visible_count] + group_rows
+            + [add_group_btn, remove_group_btn]
+        )
+        example_btn.click(
+            fn=load_example,
+            inputs=None,
+            outputs=_example_outputs,
+        )
+
+        # Outputs list matching ResultUpdate.to_tuple() field order.
         _result_outputs = [
+            results_group, error_banner,
             result_url, output_file, csv_file,
             output_plot, seq_dropdown,
             output_stats, load_status,
@@ -1390,8 +1420,20 @@ with gr.Blocks(title="cmuts — RNA Chemical Probing Analysis") as demo:
             structure_files, structure_commands,
         ]
 
-        # run_btn.click is wired from inside @gr.render so the dynamically
-        # rendered group components can be inputs.
+        run_inputs: list = [fasta_input, cif_input, visible_count]
+        run_inputs.extend(group_value_components)
+        run_inputs.extend([
+            norm_method, no_insertions, no_deletions, clip_low, clip_high,
+            trim_5, trim_3, local_align,
+            min_mapq, min_phred, min_length, max_length, no_mismatches, strand,
+            blank_5p, blank_3p, blank_cutoff, norm_cutoff, norm_percentile,
+            compute_pairwise, sig,
+        ])
+        run_btn.click(
+            fn=_run_pipeline_gradio,
+            inputs=run_inputs,
+            outputs=_result_outputs,
+        )
 
         seq_dropdown.change(
             fn=select_profile,
