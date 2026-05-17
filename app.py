@@ -60,6 +60,22 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 
+def _asset_version() -> str:
+    """Derive a cache-busting tag from static file mtimes so any deploy
+    invalidates browser-cached CSS/JS."""
+    try:
+        mtimes = [
+            os.path.getmtime(os.path.join(STATIC_DIR, f))
+            for f in ("app.css", "results.js")
+        ]
+        return str(int(max(mtimes)))
+    except OSError:
+        return "0"
+
+
+templates.env.globals["asset_version"] = _asset_version()
+
+
 # In-memory state for jobs currently running in this process. Once a job
 # completes, its results live on disk under RESULTS_DIR; this dict is
 # pruned. A job that's missing from this dict but present on disk is

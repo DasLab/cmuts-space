@@ -207,6 +207,25 @@ button.remove-row { padding: 0.4rem 0.7rem; }
 }
 .header-actions { display: flex; gap: 0.4rem; }
 
+.copy-url {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+  margin-top: 0.25rem;
+  max-width: 38rem;
+}
+.copy-url input {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.copy-url button { padding: 0.35rem 0.7rem; }
+
 .selectors { display: flex; gap: 1rem; margin-bottom: 1rem; }
 .selectors label { flex: 0 1 auto; }
 .selectors select { min-width: 220px; }

@@ -47,10 +47,11 @@
   <section class="results-header">
     <div>
       <h1>Results — job {{ job_id }}</h1>
-      <p class="muted">
-        Bookmark this URL to come back later
-        (kept for {{ ttl_hours }} hours).
-      </p>
+      <p class="muted">Bookmark to come back later (kept for {{ ttl_hours }} hours):</p>
+      <div class="copy-url">
+        <input id="result-url" type="text" readonly value="{{ request.url }}">
+        <button type="button" onclick="copyUrl()">Copy</button>
+      </div>
     </div>
     <div class="header-actions">
       <a class="button" href="/results/{{ job_id }}/download/h5">HDF5</a>
@@ -159,7 +160,18 @@
   </details>
 
   <script id="meta-data" type="application/json">{{ meta | tojson }}</script>
-  <script src="/static/results.js" defer></script>
+  <script src="/static/results.js?v={{ asset_version }}" defer></script>
+  <script>
+    function copyUrl() {
+      const input = document.getElementById('result-url');
+      input.select();
+      navigator.clipboard.writeText(input.value).catch(() => document.execCommand('copy'));
+      const btn = event.currentTarget;
+      const orig = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = orig; }, 1200);
+    }
+  </script>
 {% endif %}
 
 {% endblock %}
