@@ -1,0 +1,15 @@
+<div class="group-row">
+  <input type="text" name="group_name"
+         placeholder="Group name (e.g. 2A3_with_cdiGMP)"
+         value="{{ (initial.name if initial else '') }}">
+  <label class="file-pick">
+    <span>Modified FASTQ (required)</span>
+    <input type="file" name="mod_fastq" accept=".fastq,.fq,.gz">
+  </label>
+  <label class="file-pick">
+    <span>Control FASTQ (optional)</span>
+    <input type="file" name="nomod_fastq" accept=".fastq,.fq,.gz">
+  </label>
+  <button type="button" class="remove-row"
+          onclick="this.closest('.group-row').remove()">Remove</button>
+</div>

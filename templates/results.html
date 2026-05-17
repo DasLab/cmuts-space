@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if status == "missing" %}
+  <section class="card">
+    <h1>Result not found</h1>
+    <p>This job ID is unknown, or the results have expired
+       (kept for {{ ttl_hours }} hours).</p>
+    <p><a href="/">Return to the form</a></p>
+  </section>
+
+{% elif status == "running" %}
+  <section class="card" id="running-card">
+    <h1>Running — job {{ job_id }}</h1>
+    <p>This page will reload automatically when the pipeline finishes.</p>
+    <details open>
+      <summary>Log</summary>
+      <pre id="live-log" class="log">{{ log }}</pre>
+    </details>
+  </section>
+  <script>
+    (function poll() {
+      const jobId = {{ job_id | tojson }};
+      fetch(`/results/${jobId}/status`).then(r => r.json()).then(s => {
+        document.getElementById('live-log').textContent = s.log || '';
+        if (s.status === 'done' || s.status === 'error') {
+          window.location.reload();
+        } else {
+          setTimeout(poll, 1500);
+        }
+      }).catch(() => setTimeout(poll, 3000));
+    })();
+  </script>
+
+{% elif status == "error" %}
+  <section class="card error">
+    <h1>Pipeline failed — job {{ job_id }}</h1>
+    <p class="error-msg">{{ error or "See log for details." }}</p>
+    <details open>
+      <summary>Log</summary>
+      <pre class="log">{{ log }}</pre>
+    </details>
+    <p><a href="/">Return to the form</a></p>
+  </section>
+
+{% else %}
+  <section class="results-header">
+    <div>
+      <h1>Results — job {{ job_id }}</h1>
+      <p class="muted">
+        Bookmark this URL to come back later
+        (kept for {{ ttl_hours }} hours).
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button" href="/results/{{ job_id }}/download/h5">HDF5</a>
+      <a class="button" href="/results/{{ job_id }}/download/csv">CSV</a>
+      <a class="button primary" href="/results/{{ job_id }}/download/all">Download all</a>
+    </div>
+  </section>
+
+  {% if meta.has_combined_profile %}
+  <section class="card">
+    <h2>Combined reactivity profile</h2>
+    <div id="plot-combined" class="plot"></div>
+  </section>
+  {% endif %}
+
+  <section class="card">
+    <h2>Per-group diagnostics</h2>
+
+    <div class="selectors">
+      <label>Group
+        <select id="group-select">
+          {% for gn in meta.group_names %}
+            <option value="{{ gn }}">{{ gn }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label id="seq-select-wrapper" style="display:none">Sequence
+        <select id="seq-select"></select>
+      </label>
+    </div>
+
+    <h3>Summary statistics</h3>
+    <table class="stats" id="stats-table"></table>
+
+    <div class="plot-grid">
+      <div class="plot-tile" data-key="profile">
+        <h3>Reactivity profile</h3>
+        <div class="plot"></div>
+      </div>
+      <div class="plot-tile" data-key="mod_heatmap">
+        <h3>Modification heatmap</h3>
+        <div class="plot"></div>
+      </div>
+      <div class="plot-tile" data-key="termination">
+        <h3>Termination by position</h3>
+        <div class="plot"></div>
+      </div>
+      <div class="plot-tile" data-key="coverage">
+        <h3>Coverage by position</h3>
+        <div class="plot"></div>
+      </div>
+      <div class="plot-tile" data-key="read_hist">
+        <h3>Read depth distribution</h3>
+        <div class="plot"></div>
+      </div>
+      <div class="plot-tile" data-key="cumulative_reads">
+        <h3>Cumulative reads</h3>
+        <div class="plot"></div>
+      </div>
+      <div class="plot-tile" data-key="snr_scaling">
+        <h3>SNR vs read depth</h3>
+        <div class="plot"></div>
+      </div>
+      <div class="plot-tile" data-key="mi">
+        <h3>Mutual information</h3>
+        <div class="plot"></div>
+      </div>
+      <div class="plot-tile" data-key="correlation">
+        <h3>Correlation</h3>
+        <div class="plot"></div>
+      </div>
+      <div class="plot-tile" data-key="pairwise_coverage">
+        <h3>Pairwise coverage</h3>
+        <div class="plot"></div>
+      </div>
+    </div>
+  </section>
+
+  {% if meta.chimerax_md %}
+  <section class="card">
+    <h2>Structure visualization</h2>
+    <pre class="markdown">{{ meta.chimerax_md }}</pre>
+    <div class="downloads">
+      {% for name in meta.defattr_files %}
+        <a class="button" href="/results/{{ job_id }}/download/defattr/{{ name }}">{{ name }}</a>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <details class="card">
+    <summary><h2 style="display:inline">Log</h2></summary>
+    <pre class="log">{{ log }}</pre>
+  </details>
+
+  <script id="meta-data" type="application/json">{{ meta | tojson }}</script>
+  <script src="/static/results.js" defer></script>
+{% endif %}
+
+{% endblock %}

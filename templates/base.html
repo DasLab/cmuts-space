@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}cmuts — RNA Chemical Probing Analysis{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+  <script src="https://cdn.plot.ly/plotly-3.0.1.min.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="brand">cmuts</a>
+    <nav>
+      <a href="https://github.com/hmblair/cmuts">GitHub</a>
+      <a href="https://hmblair.github.io/cmuts">Docs</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <span>MIT licensed</span>
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

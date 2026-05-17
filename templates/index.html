@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="intro">
+  <h1>cmuts — RNA Chemical Probing Analysis</h1>
+  <p>
+    Upload a FASTA reference and FASTQ file(s) from a MaP-seq experiment to
+    compute normalized reactivity profiles. Use <strong>+ Add group</strong>
+    to compare multiple conditions — normalization is applied across all
+    groups so values are directly comparable.
+  </p>
+</section>
+
+<form id="run-form" method="post" action="/run" enctype="multipart/form-data">
+  <fieldset class="card">
+    <legend>Input data</legend>
+    <label class="file-pick">
+      <span>Reference FASTA (required)</span>
+      <input type="file" name="fasta" accept=".fasta,.fa" required>
+    </label>
+    <label class="file-pick">
+      <span>Reference structure CIF (optional, single-reference FASTAs only)</span>
+      <input type="file" name="cif" accept=".cif">
+    </label>
+  </fieldset>
+
+  <fieldset class="card">
+    <legend>Experiment groups</legend>
+    <div id="groups">
+      {% include "_group_row.html" %}
+    </div>
+    <div class="row-actions">
+      <button type="button" class="secondary"
+              hx-get="/group-row"
+              hx-target="#groups"
+              hx-swap="beforeend">+ Add group</button>
+      <button type="button" class="secondary"
+              onclick="document.getElementById('example-form').submit()">Run with example data</button>
+    </div>
+  </fieldset>
+
+  <fieldset class="card">
+    <legend>Options</legend>
+
+    <details>
+      <summary>Alignment</summary>
+      <p class="hint">If no adapter sequences are provided, cmuts will attempt to recognize adapters outside the reference sequence and auto-trim.</p>
+      <div class="grid">
+        <label>5' adapter <input type="text" name="trim_5" placeholder="auto-detected if blank"></label>
+        <label>3' adapter <input type="text" name="trim_3" placeholder="auto-detected if blank"></label>
+        <label class="check"><input type="checkbox" name="local_align" value="true"> Local alignment</label>
+      </div>
+    </details>
+
+    <details>
+      <summary>Read filtering</summary>
+      <div class="grid">
+        <label>Min mapping quality <input type="number" name="min_mapq" value="10" min="0" max="60"></label>
+        <label>Min PHRED <input type="number" name="min_phred" value="10" min="0" max="40"></label>
+        <label>Min read length <input type="number" name="min_length" value="2" min="0"></label>
+        <label>Max read length <input type="number" name="max_length" value="1024" min="0"></label>
+        <label class="check"><input type="checkbox" name="no_mismatches" value="true"> Exclude mismatches</label>
+        <label>Strand
+          <select name="strand">
+            <option value="both" selected>both</option>
+            <option value="forward">forward</option>
+            <option value="reverse">reverse</option>
+          </select>
+        </label>
+      </div>
+    </details>
+
+    <details>
+      <summary>Normalization</summary>
+      <div class="grid">
+        <label>Method
+          <select name="norm_method">
+            <option value="ubr" selected>ubr</option>
+            <option value="outlier">outlier</option>
+            <option value="raw">raw</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" name="no_insertions" value="true" checked> Exclude insertions</label>
+        <label class="check"><input type="checkbox" name="no_deletions" value="true"> Exclude deletions</label>
+        <label class="check"><input type="checkbox" name="clip_low" value="true"> Clip negative</label>
+        <label class="check"><input type="checkbox" name="clip_high" value="true"> Clip above 1</label>
+        <label>Blank 5' bases <input type="number" name="blank_5p" value="0" min="0"></label>
+        <label>Blank 3' bases <input type="number" name="blank_3p" value="0" min="0"></label>
+        <label>Min reads / position <input type="number" name="blank_cutoff" value="10" min="0"></label>
+        <label>Min reads for norm <input type="number" name="norm_cutoff" value="500" min="0"></label>
+        <label>Norm percentile <input type="number" name="norm_percentile" value="90" min="50" max="100"></label>
+      </div>
+    </details>
+
+    <details>
+      <summary>Pairwise analysis</summary>
+      <p class="hint">O(L²) in sequence length, slow for long references.</p>
+      <label class="check"><input type="checkbox" name="compute_pairwise" value="true"> Compute pairwise correlations</label>
+      <label>Significance (Bonferroni) <input type="number" name="sig" value="0.05" min="0.001" max="0.1" step="0.001"></label>
+    </details>
+  </fieldset>
+
+  <div class="submit-row">
+    <button type="submit" class="primary">Run Pipeline</button>
+  </div>
+</form>
+
+<form id="example-form" method="post" action="/run-example" style="display:none"></form>
+
+<p class="hint">FASTQ files larger than {{ max_fastq_mb }} MB may exceed memory limits. Results persist for {{ ttl_hours }} hours.</p>
+{% endblock %}

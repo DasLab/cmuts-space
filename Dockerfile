@@ -44,14 +44,21 @@ RUN sed -i 's/font.family.*=.*"Helvetica"/font.family"] = "Nimbus Sans"/' \
     fc-cache -f && \
     python3 -c "import matplotlib.font_manager; matplotlib.font_manager._load_fontmanager(try_read_cache=False)"
 
-# Install Gradio
-RUN pip install --no-cache-dir gradio plotly h5py uvicorn
+# Install Python web deps
+RUN pip install --no-cache-dir \
+    "fastapi>=0.110" \
+    "uvicorn[standard]>=0.27" \
+    "jinja2>=3.1" \
+    "python-multipart>=0.0.9" \
+    plotly "kaleido==0.2.1" h5py
 
 # Clean up build artifacts
 RUN rm -rf /cmuts/build
 
-# Copy the app and example data
-COPY app.py /app/app.py
+# Copy the app, templates, static assets, and example data
+COPY app.py pipeline.py /app/
+COPY templates /app/templates
+COPY static /app/static
 COPY examples /app/examples
 WORKDIR /app
 
@@ -61,4 +68,4 @@ RUN useradd -m -u 1000 user
 USER user
 ENV HOME=/home/user PATH="/cmuts/bin:/home/user/.local/bin:$PATH"
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]
