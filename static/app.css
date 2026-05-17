@@ -220,6 +220,34 @@ button.remove-row { padding: 0.4rem 0.7rem; }
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
   gap: 1rem;
 }
+
+.plot-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+@media (max-width: 720px) {
+  .plot-row { grid-template-columns: 1fr; }
+}
+
+.plot-tile.plot-full { margin-bottom: 1rem; }
+
+details.additional-plots {
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+}
+details.additional-plots > summary {
+  font-weight: 600;
+  font-size: 1rem;
+  margin-bottom: 0.75rem;
+  cursor: pointer;
+}
+details.additional-plots[open] > summary {
+  margin-bottom: 1rem;
+}
 .plot-tile {
   border: 1px solid var(--border);
   border-radius: var(--radius);

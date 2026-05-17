@@ -85,48 +85,60 @@
     <h3>Summary statistics</h3>
     <table class="stats" id="stats-table"></table>
 
-    <div class="plot-grid">
-      <div class="plot-tile" data-key="profile">
-        <h3>Reactivity profile</h3>
-        <div class="plot"></div>
-      </div>
+    <div class="plot-tile plot-full" data-key="profile">
+      <h3>Reactivity profile</h3>
+      <div class="plot"></div>
+    </div>
+
+    <div class="plot-row">
       <div class="plot-tile" data-key="mod_heatmap">
         <h3>Modification heatmap</h3>
-        <div class="plot"></div>
-      </div>
-      <div class="plot-tile" data-key="termination">
-        <h3>Termination by position</h3>
         <div class="plot"></div>
       </div>
       <div class="plot-tile" data-key="coverage">
         <h3>Coverage by position</h3>
         <div class="plot"></div>
       </div>
+    </div>
+
+    <div class="plot-row">
       <div class="plot-tile" data-key="read_hist">
         <h3>Read depth distribution</h3>
         <div class="plot"></div>
       </div>
-      <div class="plot-tile" data-key="cumulative_reads">
-        <h3>Cumulative reads</h3>
-        <div class="plot"></div>
-      </div>
-      <div class="plot-tile" data-key="snr_scaling">
-        <h3>SNR vs read depth</h3>
-        <div class="plot"></div>
-      </div>
-      <div class="plot-tile" data-key="mi">
-        <h3>Mutual information</h3>
-        <div class="plot"></div>
-      </div>
-      <div class="plot-tile" data-key="correlation">
-        <h3>Correlation</h3>
-        <div class="plot"></div>
-      </div>
-      <div class="plot-tile" data-key="pairwise_coverage">
-        <h3>Pairwise coverage</h3>
+      <div class="plot-tile" data-key="reads_per_block">
+        <h3>Mean reads per reference bin</h3>
         <div class="plot"></div>
       </div>
     </div>
+
+    <details class="additional-plots">
+      <summary>Additional plots</summary>
+      <div class="plot-row">
+        <div class="plot-tile" data-key="termination">
+          <h3>Termination by position</h3>
+          <div class="plot"></div>
+        </div>
+        <div class="plot-tile" data-key="snr_scaling">
+          <h3>SNR vs read depth</h3>
+          <div class="plot"></div>
+        </div>
+      </div>
+      <div class="plot-row">
+        <div class="plot-tile" data-key="mi">
+          <h3>Mutual information</h3>
+          <div class="plot"></div>
+        </div>
+        <div class="plot-tile" data-key="correlation">
+          <h3>Correlation</h3>
+          <div class="plot"></div>
+        </div>
+      </div>
+      <div class="plot-tile plot-full" data-key="pairwise_coverage">
+        <h3>Pairwise coverage</h3>
+        <div class="plot"></div>
+      </div>
+    </details>
   </section>
 
   {% if meta.chimerax_md %}

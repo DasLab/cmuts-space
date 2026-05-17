@@ -68,14 +68,17 @@
 
   function refreshSeqOptions(group) {
     const names = (meta.sequence_names && meta.sequence_names[group]) || [];
-    seqSelect.innerHTML = names.map((n, i) =>
-      `<option value="${i}">${escapeHtml(n)}</option>`
-    ).join('');
+    const options = [];
     if (names.length > 1) {
-      seqWrapper.style.display = '';
-    } else {
-      seqWrapper.style.display = 'none';
+      // Special first option that maps to the multi-reference heatmap
+      // view (the pre-saved profile.json) on the server.
+      options.push('<option value="all">All references (heatmap)</option>');
     }
+    names.forEach((n, i) => {
+      options.push(`<option value="${i}">${escapeHtml(n)}</option>`);
+    });
+    seqSelect.innerHTML = options.join('');
+    seqWrapper.style.display = names.length > 1 ? '' : 'none';
   }
 
   function escapeHtml(s) {
@@ -95,22 +98,68 @@
     } catch (e) { /* ignore */ }
   }
 
+  // Tiles inside a closed <details> have zero size on first render, which
+  // makes Plotly draw with width 0. Track which tiles are stale (need
+  // rendering) and only render the ones currently visible. When a
+  // <details> opens, render any stale tiles inside.
+  const stale = new WeakSet();
+
+  function isVisible(tile) {
+    let el = tile.parentElement;
+    while (el && el !== document.body) {
+      if (el.tagName === 'DETAILS' && !el.open) return false;
+      el = el.parentElement;
+    }
+    return true;
+  }
+
+  async function renderTileIfVisible(tile, group, seq) {
+    if (!isVisible(tile)) {
+      stale.add(tile);
+      return;
+    }
+    stale.delete(tile);
+    const key = tile.dataset.key;
+    // Non-per-reference tiles always show the whole-dataset view.
+    await renderPlot(tile, group, key, PER_REF.has(key) ? seq : '0');
+  }
+
   async function refreshAll() {
     const group = groupSelect.value;
-    const seq = parseInt(seqSelect.value || '0', 10);
+    const seq = seqSelect.value || '0';
     renderStats(group);
-    await Promise.all(tiles.map(tile =>
-      renderPlot(tile, group, tile.dataset.key, PER_REF.has(tile.dataset.key) ? seq : 0)
-    ));
+    // Mark every tile stale so closed-section tiles get re-rendered when
+    // opened — important after group switches.
+    tiles.forEach(t => stale.add(t));
+    await Promise.all(tiles.map(t => renderTileIfVisible(t, group, seq)));
   }
 
   async function refreshPerRef() {
     const group = groupSelect.value;
-    const seq = parseInt(seqSelect.value || '0', 10);
+    const seq = seqSelect.value || '0';
     await Promise.all(tiles
       .filter(t => PER_REF.has(t.dataset.key))
-      .map(tile => renderPlot(tile, group, tile.dataset.key, seq))
+      .map(tile => renderTileIfVisible(tile, group, seq))
     );
+  }
+
+  function bindLazyDetails() {
+    document.querySelectorAll('details').forEach(d => {
+      d.addEventListener('toggle', async () => {
+        if (!d.open) return;
+        const group = groupSelect.value;
+        const seq = seqSelect.value || '0';
+        const inner = d.querySelectorAll('.plot-tile');
+        await Promise.all(Array.from(inner).map(t => {
+          if (stale.has(t)) return renderTileIfVisible(t, group, seq);
+          // Already rendered — just nudge Plotly to refit if size changed.
+          const plotEl = t.querySelector('.plot');
+          if (typeof Plotly !== 'undefined' && plotEl && plotEl.firstChild) {
+            try { Plotly.Plots.resize(plotEl); } catch (e) { /* ignore */ }
+          }
+        }));
+      });
+    });
   }
 
   groupSelect.addEventListener('change', () => {
@@ -119,6 +168,7 @@
   });
   seqSelect.addEventListener('change', refreshPerRef);
 
+  bindLazyDetails();
   refreshSeqOptions(groupSelect.value);
   renderCombined();
   refreshAll();

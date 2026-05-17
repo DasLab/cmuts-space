@@ -34,7 +34,9 @@
               hx-target="#groups"
               hx-swap="beforeend">+ Add group</button>
       <button type="button" class="secondary"
-              onclick="document.getElementById('example-form').submit()">Run with example data</button>
+              onclick="document.getElementById('example-form-single').submit()">Run single-reference example</button>
+      <button type="button" class="secondary"
+              onclick="document.getElementById('example-form-multi').submit()">Run multi-reference example</button>
     </div>
   </fieldset>
 
@@ -104,7 +106,8 @@
   </div>
 </form>
 
-<form id="example-form" method="post" action="/run-example" style="display:none"></form>
+<form id="example-form-single" method="post" action="/run-example/single-ref" style="display:none"></form>
+<form id="example-form-multi" method="post" action="/run-example/multi-ref" style="display:none"></form>
 
 <p class="hint">FASTQ files larger than {{ max_fastq_mb }} MB may exceed memory limits. Results persist for {{ ttl_hours }} hours.</p>
 {% endblock %}

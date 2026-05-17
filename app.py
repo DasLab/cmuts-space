@@ -141,14 +141,19 @@ EXAMPLES_DIR = os.environ.get(
 )
 
 
-@app.post("/run-example")
-def run_example(background_tasks: BackgroundTasks):
-    """Submit the bundled example dataset as a job, skipping the upload form."""
+@app.post("/run-example/{name}")
+def run_example(name: str, background_tasks: BackgroundTasks):
+    """Submit a bundled example dataset (subdirectory under EXAMPLES_DIR)."""
+    safe = os.path.basename(name)
+    src_dir = os.path.join(EXAMPLES_DIR, safe)
+    if not os.path.isdir(src_dir):
+        raise HTTPException(404, f"Unknown example dataset: {safe}")
+
     fasta = None
     treated = None
     untreated = None
-    for f in sorted(os.listdir(EXAMPLES_DIR)):
-        path = os.path.join(EXAMPLES_DIR, f)
+    for f in sorted(os.listdir(src_dir)):
+        path = os.path.join(src_dir, f)
         lower = f.lower()
         if lower.endswith((".fasta", ".fa")):
             fasta = path
@@ -157,7 +162,7 @@ def run_example(background_tasks: BackgroundTasks):
         elif lower.endswith((".fastq", ".fq", ".fastq.gz", ".fq.gz")):
             treated = path
     if fasta is None or treated is None:
-        raise HTTPException(500, "Example dataset is missing required files.")
+        raise HTTPException(500, f"Example dataset {safe} is missing required files.")
 
     job_id = uuid.uuid4().hex[:12]
     job_dir = job_dir_for(job_id)
@@ -411,25 +416,43 @@ def plot_combined(job_id: str) -> PlainTextResponse:
 
 @app.get("/results/{job_id}/plot/{group}/{key}", response_class=PlainTextResponse)
 def plot_group_key(
-    job_id: str, group: str, key: str, seq: int = 0,
+    job_id: str, group: str, key: str, seq: str = "0",
 ) -> PlainTextResponse:
     if key not in PLOT_KEYS:
         raise HTTPException(404, "Unknown plot key.")
     job_dir = job_dir_for(job_id)
-    # For seq=0 use the pre-computed JSON. For seq>0 on per-ref plots,
-    # build on demand from the HDF5.
-    if seq == 0:
-        path = os.path.join(job_dir, "groups", group, f"{key}.json")
-        body = _read_plot_json(path)
-        if body is not None:
-            return PlainTextResponse(body, media_type="application/json")
-        # Falls through to on-demand below for missing plots.
+    saved_path = os.path.join(job_dir, "groups", group, f"{key}.json")
+
+    # "all" is a special profile-only mode that returns the pre-saved
+    # heatmap-across-references plot. For every other plot the pre-saved
+    # JSON is the first-reference view.
+    if seq == "all":
+        if key == "profile":
+            body = _read_plot_json(saved_path)
+            if body is not None:
+                return PlainTextResponse(body, media_type="application/json")
+        # Other tiles fall back to first-reference view in "all" mode.
+        seq = "0"
+
+    try:
+        seq_idx = int(seq)
+    except ValueError:
+        raise HTTPException(400, f"Invalid seq value: {seq}")
+
     if key == "profile":
-        body = build_profile_plot(job_dir, group, seq)
+        # Always build single-reference profiles on demand so seq=0 shows
+        # the first reference, not the all-references heatmap.
+        body = build_profile_plot(job_dir, group, seq_idx)
     elif key in {"mi", "correlation", "pairwise_coverage"}:
-        body = build_perref_plot(job_dir, group, key, seq)
+        if seq_idx == 0:
+            body = _read_plot_json(saved_path)
+            if body is None:
+                body = build_perref_plot(job_dir, group, key, seq_idx)
+        else:
+            body = build_perref_plot(job_dir, group, key, seq_idx)
     else:
-        body = None
+        body = _read_plot_json(saved_path)
+
     if body is None:
         raise HTTPException(404, "Plot not available for this group/sequence.")
     return PlainTextResponse(body, media_type="application/json")

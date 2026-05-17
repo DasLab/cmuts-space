@@ -52,7 +52,7 @@ _FASTQ_SUFFIXES = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
 
 PLOT_KEYS = [
     "profile", "mod_heatmap", "termination", "coverage",
-    "read_hist", "cumulative_reads", "snr_scaling",
+    "read_hist", "reads_per_block", "snr_scaling",
     "mi", "correlation", "pairwise_coverage",
 ]
 
@@ -349,7 +349,7 @@ def _build_plots_for_group(
     """Build every diagnostic plot for one group. Returns key -> Figure or
     None when the underlying data is absent."""
     from cmuts.visualize.plotly import (
-        plot_correlation, plot_coverage, plot_cumulative_reads, plot_examples,
+        plot_correlation, plot_coverage, plot_reads_per_block, plot_examples,
         plot_heatmap, plot_mi, plot_pairwise_coverage,
         plot_read_hist, plot_snr_scaling, plot_termination,
     )
@@ -368,9 +368,14 @@ def _build_plots_for_group(
     is_multi = not combined.single()
     reads = np.asarray(combined.reads)
     plots["read_hist"] = plot_read_hist(reads, group_name) if is_multi else None
-    plots["cumulative_reads"] = plot_cumulative_reads(reads, group_name) if is_multi else None
+    plots["reads_per_block"] = plot_reads_per_block(reads, group_name) if is_multi else None
 
-    plots["snr_scaling"] = plot_snr_scaling(mod, nomod, combined, group_name)
+    # plot_snr_scaling materializes an (xi, refs, len) array that explodes
+    # in RAM for large reference counts. Restrict to single-reference runs.
+    if combined.single():
+        plots["snr_scaling"] = plot_snr_scaling(mod, nomod, combined, group_name)
+    else:
+        plots["snr_scaling"] = None
 
     plots["mi"] = (
         plot_mi(np.asarray(combined.mi)[0], group_name)
@@ -666,10 +671,22 @@ def run_pipeline(
             norm_cfg.sig,
         )
 
-        with h5py.File(counts_path, "r") as f:
+        # cmuts.compute_reactivities runs in-process and prints status to
+        # stdout. Capture it so it shows up in the job log alongside the
+        # subprocess output from steps 1 and 2.
+        import contextlib
+        import io as _io
+
+        buf = _io.StringIO()
+        with h5py.File(counts_path, "r") as f, \
+                contextlib.redirect_stdout(buf), \
+                contextlib.redirect_stderr(buf):
             results = _cmuts.compute_reactivities(
                 f, fasta_path, cmuts_groups, norm_opts, shared_norm=True,
             )
+        captured = buf.getvalue().rstrip()
+        if captured:
+            log(captured)
 
         if len(results) > 1:
             log(f"  Pooled {norm_cfg.norm_method} normalization across {len(results)} groups.")
@@ -695,6 +712,8 @@ def run_pipeline(
         sequence_names_per_group: dict[str, list[str]] = {}
 
         # Per-group plots: profile, heatmap, termination, coverage, ... (first ref).
+        # Each plot is wrapped so a single failure (memory blow-up on a
+        # pathological dataset, etc.) just skips that tile.
         for r in results:
             gname = r.group.name
             group_plot_dir = os.path.join(job_dir, "groups", gname)
