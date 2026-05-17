@@ -65,6 +65,27 @@
     <h2>Combined reactivity profile</h2>
     <div id="plot-combined" class="plot"></div>
   </section>
+  <section class="card">
+    <h2>Profile difference</h2>
+    <div class="selectors">
+      <label>A
+        <select id="diff-a">
+          {% for gn in meta.group_names %}
+            <option value="{{ gn }}">{{ gn }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <span class="muted">−</span>
+      <label>B
+        <select id="diff-b">
+          {% for gn in meta.group_names %}
+            <option value="{{ gn }}">{{ gn }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <div id="plot-diff" class="plot"></div>
+  </section>
   {% endif %}
 
   <section class="card">

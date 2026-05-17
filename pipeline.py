@@ -40,7 +40,7 @@ import plotly.graph_objects as go
 
 MAX_GROUPS = int(os.environ.get("CMUTS_MAX_GROUPS", "5"))
 MAX_FASTQ_MB = int(os.environ.get("CMUTS_MAX_FASTQ_MB", "500"))
-RESULTS_TTL_HOURS = int(os.environ.get("CMUTS_RESULTS_TTL_HOURS", "48"))
+RESULTS_TTL_HOURS = int(os.environ.get("CMUTS_RESULTS_TTL_HOURS", "72"))
 PIPELINE_TIMEOUT_SEC = int(os.environ.get("CMUTS_PIPELINE_TIMEOUT_SEC", "600"))
 DEFAULT_GROUP_NAME = "profile"
 
@@ -136,8 +136,16 @@ def parse_fasta(fasta_path: str) -> list[tuple[str, str]]:
 
 
 def sanitize_group_name(raw: str | None) -> str:
-    name = re.sub(r"[^\w\-]", "_", (raw or "").strip())
+    """Display name: keep spaces and most printable chars. Only strip
+    leading/trailing whitespace and replace ``/`` (which has special
+    meaning in HDF5 paths and URLs)."""
+    name = (raw or "").strip().replace("/", "_")
     return name or DEFAULT_GROUP_NAME
+
+
+def fastq_safe_name(raw: str) -> str:
+    """Filesystem-safe variant for use as a FASTQ filename prefix."""
+    return re.sub(r"[^\w\-]", "_", raw) or DEFAULT_GROUP_NAME
 
 
 def fastq_stem(path: str) -> str:
@@ -313,7 +321,9 @@ def _build_defattrs(
         reactivity = np.asarray(r.combined.reactivity)
         if reactivity.shape[0] != 1:
             continue
-        defattr_path = os.path.join(out_dir, f"{name}.defattr")
+        # Defattr filename is filesystem-safe (no spaces) so the ChimeraX
+        # `open` command parses it as a single argument.
+        defattr_path = os.path.join(out_dir, f"{fastq_safe_name(name)}.defattr")
         try:
             max_value = _cmuts.visualize.make_defattr(
                 reactivity[0], aln_seq, cif_path, defattr_path,
@@ -483,7 +493,12 @@ def write_log(job_dir: str, log_lines: list[str]) -> None:
 
 
 def build_profile_plot(job_dir: str, group_name: str, seq_idx: int) -> str | None:
-    """Build a profile plot JSON on demand for a given group/sequence."""
+    """Build a profile plot JSON on demand for a given group/sequence.
+
+    The plot's title uses the group name (for consistency with the rest
+    of the per-group tiles); the sequence identity is conveyed by the
+    sequence dropdown selection, not the title.
+    """
     from cmuts.visualize.plotly import plot_profile
 
     h5_path = os.path.join(job_dir, "profiles.h5")
@@ -503,8 +518,40 @@ def build_profile_plot(job_dir: str, group_name: str, seq_idx: int) -> str | Non
     if seq_idx < 0 or seq_idx >= reactivity.shape[0]:
         return None
     seq = sequences[seq_idx] if sequences and seq_idx < len(sequences) else None
-    names = build_seq_names(reactivity.shape[0], sequences)
-    fig = plot_profile(reactivity[seq_idx], error[seq_idx], names[seq_idx], sequence=seq)
+    fig = plot_profile(reactivity[seq_idx], error[seq_idx], group_name, sequence=seq)
+    return fig.to_json()
+
+
+def build_diff_plot(job_dir: str, group_a: str, group_b: str) -> str | None:
+    """Build a plot of (group_a − group_b) reactivity over positions.
+
+    Only valid for single-reference runs. Errors are propagated as
+    sqrt(err_a^2 + err_b^2). Returns None if either group is missing
+    or the underlying data is multi-reference.
+    """
+    from cmuts.visualize.plotly import plot_profile
+
+    h5_path = os.path.join(job_dir, "profiles.h5")
+    if not os.path.isfile(h5_path):
+        return None
+    with h5py.File(h5_path, "r") as f:
+        if group_a not in f or group_b not in f:
+            return None
+        ra = np.array(f[group_a]["reactivity"])
+        rb = np.array(f[group_b]["reactivity"])
+        ea = np.array(f[group_a]["error"])
+        eb = np.array(f[group_b]["error"])
+        if ra.shape[0] != 1 or rb.shape[0] != 1:
+            return None
+        sequences = None
+        if "sequence" in f:
+            sequences = [
+                s.decode() if isinstance(s, bytes) else s for s in f["sequence"]
+            ]
+    seq = sequences[0] if sequences else None
+    diff = ra[0] - rb[0]
+    err = np.sqrt(ea[0] ** 2 + eb[0] ** 2)
+    fig = plot_profile(diff, err, f"{group_a} − {group_b}", sequence=seq)
     return fig.to_json()
 
 
@@ -610,7 +657,7 @@ def run_pipeline(
 
         group_fastq_info: list[tuple[str, str, str | None]] = []
         for g in groups:
-            prefix = g.name + "__"
+            prefix = fastq_safe_name(g.name) + "__"
             mod_basename = prefix + os.path.basename(g.mod_fastq)
             mod_stem = fastq_stem(mod_basename)
             shutil.copy(g.mod_fastq, os.path.join(fastq_dir, mod_basename))
@@ -729,7 +776,7 @@ def run_pipeline(
         if single_ref and len(results) > 1:
             from cmuts.visualize.plotly import plot_profiles
             reactivities = [np.asarray(r.combined.reactivity)[0] for r in results]
-            combined_fig = plot_profiles(reactivities, group_names, sequence=ref_sequence)
+            combined_fig = plot_profiles(reactivities, group_names)
             _save_plot_json(combined_fig, os.path.join(job_dir, "combined_profile.json"))
             has_combined = True
 

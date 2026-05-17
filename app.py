@@ -38,6 +38,7 @@ from pipeline import (
     PLOT_KEYS,
     RESULTS_DIR,
     RESULTS_TTL_HOURS,
+    build_diff_plot,
     build_perref_plot,
     build_profile_plot,
     cleanup_old_results,
@@ -45,6 +46,7 @@ from pipeline import (
     job_dir_for,
     read_meta,
     run_pipeline,
+    fastq_safe_name,
     sanitize_group_name,
 )
 
@@ -293,7 +295,7 @@ async def run(
             k += 1
         seen_names.add(gn)
 
-        mod_path = _save_upload(mod, uploads_dir, f"{gn}__{mod.filename}")
+        mod_path = _save_upload(mod, uploads_dir, f"{fastq_safe_name(gn)}__{mod.filename}")
         if file_size_mb(mod_path) > MAX_FASTQ_MB:
             raise HTTPException(
                 400,
@@ -305,7 +307,7 @@ async def run(
         if _is_real_upload(nomod_fastq[i]):
             nomod_path = _save_upload(
                 nomod_fastq[i], uploads_dir,
-                f"{gn}__{nomod_fastq[i].filename}",
+                f"{fastq_safe_name(gn)}__{nomod_fastq[i].filename}",
             )
             if file_size_mb(nomod_path) > MAX_FASTQ_MB:
                 raise HTTPException(
@@ -430,6 +432,14 @@ def plot_combined(job_id: str) -> PlainTextResponse:
     return PlainTextResponse(body, media_type="application/json")
 
 
+@app.get("/results/{job_id}/plot/diff", response_class=PlainTextResponse)
+def plot_diff(job_id: str, a: str, b: str) -> PlainTextResponse:
+    body = build_diff_plot(job_dir_for(job_id), a, b)
+    if body is None:
+        raise HTTPException(404, "Diff plot not available for these groups.")
+    return PlainTextResponse(body, media_type="application/json")
+
+
 @app.get("/results/{job_id}/plot/{group}/{key}", response_class=PlainTextResponse)
 def plot_group_key(
     job_id: str, group: str, key: str, seq: str = "0",
@@ -484,7 +494,7 @@ def download_h5(job_id: str) -> FileResponse:
         raise HTTPException(404, "HDF5 not available.")
     meta = read_meta(job_dir_for(job_id)) or {}
     group_names = meta.get("group_names") or [job_id]
-    filename = "-".join(group_names) + "-profiles.h5"
+    filename = "-".join(fastq_safe_name(g) for g in group_names) + "-profiles.h5"
     return FileResponse(path, media_type="application/x-hdf5", filename=filename)
 
 
@@ -495,7 +505,7 @@ def download_csv(job_id: str) -> FileResponse:
         raise HTTPException(404, "CSV not available.")
     meta = read_meta(job_dir_for(job_id)) or {}
     group_names = meta.get("group_names") or [job_id]
-    filename = "-".join(group_names) + "-profiles.csv"
+    filename = "-".join(fastq_safe_name(g) for g in group_names) + "-profiles.csv"
     return FileResponse(path, media_type="text/csv", filename=filename)
 
 

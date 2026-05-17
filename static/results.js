@@ -94,8 +94,41 @@
       const resp = await fetch(`/results/${jobId}/plot/combined`);
       if (!resp.ok) return;
       const fig = await resp.json();
-      Plotly.newPlot(el, fig.data, fig.layout, {responsive: true, displaylogo: false});
+      Plotly.newPlot(el, fig.data, normalizeLayout(fig.layout), {responsive: true, displaylogo: false});
     } catch (e) { /* ignore */ }
+  }
+
+  async function renderDiff() {
+    const el = document.getElementById('plot-diff');
+    if (!el) return;
+    const a = document.getElementById('diff-a').value;
+    const b = document.getElementById('diff-b').value;
+    el.innerHTML = '<p class="muted">Loading…</p>';
+    try {
+      const resp = await fetch(
+        `/results/${jobId}/plot/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`
+      );
+      if (!resp.ok) {
+        el.innerHTML = `<p class="muted">Diff not available (HTTP ${resp.status}).</p>`;
+        return;
+      }
+      const fig = await resp.json();
+      el.innerHTML = '';
+      Plotly.newPlot(el, fig.data, normalizeLayout(fig.layout), {responsive: true, displaylogo: false});
+    } catch (e) {
+      el.innerHTML = `<p class="muted">Error: ${e.message || e}</p>`;
+    }
+  }
+
+  function bindDiffSelectors() {
+    const a = document.getElementById('diff-a');
+    const b = document.getElementById('diff-b');
+    if (!a || !b) return;
+    // Default B to the second group so the initial diff is meaningful.
+    if (b.options.length > 1) b.selectedIndex = 1;
+    a.addEventListener('change', renderDiff);
+    b.addEventListener('change', renderDiff);
+    renderDiff();
   }
 
   // Tiles inside a closed <details> have zero size on first render, which
@@ -171,5 +204,6 @@
   bindLazyDetails();
   refreshSeqOptions(groupSelect.value);
   renderCombined();
+  bindDiffSelectors();
   refreshAll();
 })();
