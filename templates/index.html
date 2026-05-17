@@ -81,8 +81,8 @@
         </label>
         <label class="check"><input type="checkbox" name="no_insertions" value="true" checked> Exclude insertions</label>
         <label class="check"><input type="checkbox" name="no_deletions" value="true"> Exclude deletions</label>
-        <label class="check"><input type="checkbox" name="clip_low" value="true"> Clip negative</label>
-        <label class="check"><input type="checkbox" name="clip_high" value="true"> Clip above 1</label>
+        <label>Clip below <input type="number" name="clip_below" step="any" placeholder="off"></label>
+        <label>Clip above <input type="number" name="clip_above" step="any" placeholder="off"></label>
         <label>Blank 5' bases <input type="number" name="blank_5p" value="0" min="0"></label>
         <label>Blank 3' bases <input type="number" name="blank_3p" value="0" min="0"></label>
         <label>Min reads / position <input type="number" name="blank_cutoff" value="10" min="0"></label>

@@ -91,8 +91,8 @@ class NormConfig:
     norm_method: str = "ubr"
     no_insertions: bool = True
     no_deletions: bool = False
-    clip_low: bool = False
-    clip_high: bool = False
+    clip_below: float | None = None
+    clip_above: float | None = None
     blank_5p: int = 0
     blank_3p: int = 0
     blank_cutoff: int = 10
@@ -662,7 +662,7 @@ def run_pipeline(
             not norm_cfg.no_deletions,
             norm_cfg.norm_method,
             (norm_cfg.blank_5p, norm_cfg.blank_3p),
-            (norm_cfg.clip_low, norm_cfg.clip_high),
+            (norm_cfg.clip_below, norm_cfg.clip_above),
             norm_cfg.sig,
         )
 
