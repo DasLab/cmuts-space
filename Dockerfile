@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir cmake
 # Clone and build cmuts at a pinned commit.
 # This SHA is automatically updated by the "Sync HF Space" workflow in
 # github.com/hmblair/cmuts on every push to master — do not pin manually.
-ARG CMUTS_SHA=79551e954d29c26d74cb713ac6ec6ffd7377f921
+ARG CMUTS_SHA=c73273b8bbeecce972d3283cb876280d535cd097
 RUN git clone --recurse-submodules https://github.com/hmblair/cmuts.git /cmuts && \
     cd /cmuts && git checkout $CMUTS_SHA
 WORKDIR /cmuts
