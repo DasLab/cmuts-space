@@ -317,7 +317,7 @@ def _build_defattrs(
     ]
 
     for r in results:
-        name = r.group.name
+        name = r.experiment.name
         reactivity = np.asarray(r.combined.reactivity)
         if reactivity.shape[0] != 1:
             continue
@@ -697,8 +697,8 @@ def run_pipeline(
 
         # Step 3: normalize
         log("\n=== Step 3: Normalizing reactivities ===")
-        cmuts_groups = [
-            _cmuts.Group(
+        experiments = [
+            _cmuts.Experiment(
                 name=name,
                 mod=[f"alignments/{mod_stem}"],
                 nomod=[f"alignments/{nomod_stem}"] if nomod_stem else None,
@@ -729,21 +729,21 @@ def run_pipeline(
                 contextlib.redirect_stdout(buf), \
                 contextlib.redirect_stderr(buf):
             results = _cmuts.compute_reactivities(
-                f, fasta_path, cmuts_groups, norm_opts, shared_norm=True,
+                f, fasta_path, experiments, norm_opts,
             )
         captured = buf.getvalue().rstrip()
         if captured:
             log(captured)
 
         if len(results) > 1:
-            log(f"  Pooled {norm_cfg.norm_method} normalization across {len(results)} groups.")
+            log(f"  Pooled {norm_cfg.norm_method} normalization across {len(results)} experiments.")
         log("Normalization complete.")
 
         # Save the combined HDF5 + CSV.
         final_h5 = os.path.join(job_dir, "profiles.h5")
-        _cmuts.save_groups(final_h5, [(r.group.name, r.combined) for r in results])
+        _cmuts.save_groups(final_h5, [(r.experiment.name, r.combined) for r in results])
 
-        group_names = [r.group.name for r in results]
+        group_names = [r.experiment.name for r in results]
         csv_path = _generate_csv(final_h5, fasta_path, group_names)
         # Move CSV next to HDF5.
         final_csv = os.path.join(job_dir, "profiles.csv")
@@ -762,7 +762,7 @@ def run_pipeline(
         # Each plot is wrapped so a single failure (memory blow-up on a
         # pathological dataset, etc.) just skips that tile.
         for r in results:
-            gname = r.group.name
+            gname = r.experiment.name
             group_plot_dir = os.path.join(job_dir, "groups", gname)
             os.makedirs(group_plot_dir, exist_ok=True)
             plots = _build_plots_for_group(
