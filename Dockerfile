@@ -37,20 +37,16 @@ ENV PATH="/cmuts/bin:$PATH"
 RUN cp /cmuts/htscodecs/lib/*.so* /usr/local/lib/ && ldconfig
 
 # Patch Helvetica -> Nimbus Sans (available from fonts-urw-base35)
-RUN sed -i 's/font.family.*=.*"Helvetica"/font.family"] = "Nimbus Sans"/' \
-    /cmuts/src/python/cmuts/visualize/plotting.py && \
-    sed -i 's/FONT_FAMILY = "Helvetica"/FONT_FAMILY = "Nimbus Sans"/' \
+RUN sed -i 's/FONT_FAMILY = "Helvetica"/FONT_FAMILY = "Nimbus Sans"/' \
     /cmuts/src/python/cmuts/visualize/plotly.py && \
-    fc-cache -f && \
-    python3 -c "import matplotlib.font_manager; matplotlib.font_manager._load_fontmanager(try_read_cache=False)"
+    fc-cache -f
 
-# Install Python web deps
+# Install Python web deps (plotly + h5py come in via cmuts)
 RUN pip install --no-cache-dir \
     "fastapi>=0.110" \
     "uvicorn[standard]>=0.27" \
     "jinja2>=3.1" \
-    "python-multipart>=0.0.9" \
-    plotly "kaleido==0.2.1" h5py
+    "python-multipart>=0.0.9"
 
 # Clean up build artifacts
 RUN rm -rf /cmuts/build

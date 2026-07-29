@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import os
 import shutil
 import time
@@ -20,7 +19,6 @@ from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
-    PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -35,12 +33,8 @@ from pipeline import (
     MAX_FASTQ_MB,
     MAX_GROUPS,
     NormConfig,
-    PLOT_KEYS,
     RESULTS_DIR,
     RESULTS_TTL_HOURS,
-    build_diff_plot,
-    build_perref_plot,
-    build_profile_plot,
     cleanup_old_results,
     file_size_mb,
     job_dir_for,
@@ -375,7 +369,7 @@ def status(job_id: str) -> JSONResponse:
     })
 
 
-# --- Routes: results page + plot data ---
+# --- Routes: results page + report ---
 
 
 @app.get("/results/{job_id}", response_class=HTMLResponse)
@@ -392,14 +386,11 @@ def results(request: Request, job_id: str) -> HTMLResponse:
                 "log": "",
                 "error": None,
                 "meta": None,
-                "first_group": None,
+                "has_report": False,
             },
             status_code=404,
         )
-    meta = read_meta(job_dir_for(job_id))
-    first_group = None
-    if meta and meta.get("group_names"):
-        first_group = meta["group_names"][0]
+    has_report = os.path.isfile(os.path.join(job_dir_for(job_id), "report.html"))
     return templates.TemplateResponse(
         request,
         "results.html",
@@ -409,79 +400,20 @@ def results(request: Request, job_id: str) -> HTMLResponse:
             "ttl_hours": RESULTS_TTL_HOURS,
             "log": "\n".join(log_lines),
             "error": error,
-            "meta": meta,
-            "first_group": first_group,
-            "plot_keys": PLOT_KEYS,
+            "meta": read_meta(job_dir_for(job_id)),
+            "has_report": has_report,
         },
     )
 
 
-def _read_plot_json(path: str) -> str | None:
+@app.get("/results/{job_id}/report", response_class=HTMLResponse)
+def report(job_id: str) -> HTMLResponse:
+    """The self-contained HTML report, embedded by the results page as an iframe."""
+    path = os.path.join(job_dir_for(job_id), "report.html")
     if not os.path.isfile(path):
-        return None
+        raise HTTPException(404, "Report not available.")
     with open(path) as f:
-        return f.read()
-
-
-@app.get("/results/{job_id}/plot/combined", response_class=PlainTextResponse)
-def plot_combined(job_id: str) -> PlainTextResponse:
-    path = os.path.join(job_dir_for(job_id), "combined_profile.json")
-    body = _read_plot_json(path)
-    if body is None:
-        raise HTTPException(404, "Combined plot not available.")
-    return PlainTextResponse(body, media_type="application/json")
-
-
-@app.get("/results/{job_id}/plot/diff", response_class=PlainTextResponse)
-def plot_diff(job_id: str, a: str, b: str) -> PlainTextResponse:
-    body = build_diff_plot(job_dir_for(job_id), a, b)
-    if body is None:
-        raise HTTPException(404, "Diff plot not available for these groups.")
-    return PlainTextResponse(body, media_type="application/json")
-
-
-@app.get("/results/{job_id}/plot/{group}/{key}", response_class=PlainTextResponse)
-def plot_group_key(
-    job_id: str, group: str, key: str, seq: str = "0",
-) -> PlainTextResponse:
-    if key not in PLOT_KEYS:
-        raise HTTPException(404, "Unknown plot key.")
-    job_dir = job_dir_for(job_id)
-    saved_path = os.path.join(job_dir, "groups", group, f"{key}.json")
-
-    # "all" is a special profile-only mode that returns the pre-saved
-    # heatmap-across-references plot. For every other plot the pre-saved
-    # JSON is the first-reference view.
-    if seq == "all":
-        if key == "profile":
-            body = _read_plot_json(saved_path)
-            if body is not None:
-                return PlainTextResponse(body, media_type="application/json")
-        # Other tiles fall back to first-reference view in "all" mode.
-        seq = "0"
-
-    try:
-        seq_idx = int(seq)
-    except ValueError:
-        raise HTTPException(400, f"Invalid seq value: {seq}")
-
-    if key == "profile":
-        # Always build single-reference profiles on demand so seq=0 shows
-        # the first reference, not the all-references heatmap.
-        body = build_profile_plot(job_dir, group, seq_idx)
-    elif key in {"mi", "correlation", "pairwise_coverage"}:
-        if seq_idx == 0:
-            body = _read_plot_json(saved_path)
-            if body is None:
-                body = build_perref_plot(job_dir, group, key, seq_idx)
-        else:
-            body = build_perref_plot(job_dir, group, key, seq_idx)
-    else:
-        body = _read_plot_json(saved_path)
-
-    if body is None:
-        raise HTTPException(404, "Plot not available for this group/sequence.")
-    return PlainTextResponse(body, media_type="application/json")
+        return HTMLResponse(f.read())
 
 
 # --- Routes: downloads ---
@@ -518,17 +450,6 @@ def download_defattr(job_id: str, name: str) -> FileResponse:
     return FileResponse(path, media_type="text/plain", filename=safe)
 
 
-def _plot_json_to_png(json_path: str) -> bytes | None:
-    """Render a saved Plotly JSON to PNG bytes. Returns None on failure."""
-    try:
-        import plotly.graph_objects as go
-        with open(json_path) as f:
-            fig = go.Figure(json.load(f))
-        return fig.to_image(format="png", width=1000, height=600, scale=2)
-    except Exception:
-        return None
-
-
 @app.get("/results/{job_id}/download/all")
 def download_all(job_id: str) -> StreamingResponse:
     job_dir = job_dir_for(job_id)
@@ -540,28 +461,13 @@ def download_all(job_id: str) -> StreamingResponse:
         with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for root, _dirs, files in os.walk(job_dir):
                 rel = os.path.relpath(root, job_dir)
-                # Skip raw uploads to keep the bundle small.
-                if rel.startswith("uploads"):
+                if rel.startswith("uploads"):  # skip raw uploads to keep it small
                     continue
                 for name in files:
+                    if name == "meta.json":  # internal app state, not useful
+                        continue
                     full = os.path.join(root, name)
                     arc_rel = os.path.relpath(full, job_dir)
-                    # Convert plot JSONs to PNG; include the underlying h5,
-                    # csv, log, defattr, meta as-is.
-                    if name.endswith(".json") and (
-                        rel.startswith("groups")
-                        or name == "combined_profile.json"
-                    ):
-                        png = _plot_json_to_png(full)
-                        if png is not None:
-                            zf.writestr(
-                                os.path.join(job_id, arc_rel[:-5] + ".png"),
-                                png,
-                            )
-                        continue
-                    if name == "meta.json":
-                        # Skip — internal app state, not useful to the user.
-                        continue
                     zf.write(full, os.path.join(job_id, arc_rel))
         buf.seek(0)
         yield buf.read()

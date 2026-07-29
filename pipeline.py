@@ -7,13 +7,12 @@ into a single directory under ``RESULTS_DIR``.
 On-disk job layout::
 
     {job_dir}/
-        profiles.h5               final per-group HDF5
+        profiles.h5               final per-group HDF5 (data + SNR curves + names)
         profiles.csv              flat per-position table
-        meta.json                 status, group/sequence names, stats, log
+        report.html               self-contained HTML report (cmuts.report.build)
+        meta.json                 status, group names, defattr/chimerax info
         log.txt                   raw streaming log
         defattr/{group}.defattr   (if a CIF was supplied)
-        groups/{group}/{key}.json plotly figure JSON, first reference
-        combined_profile.json     overlay across groups (single-ref + multi-group)
 """
 
 from __future__ import annotations
@@ -33,7 +32,6 @@ from typing import Callable
 
 import h5py
 import numpy as np
-import plotly.graph_objects as go
 
 
 # --- Constants ---
@@ -50,11 +48,10 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 
 _FASTQ_SUFFIXES = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
 
-PLOT_KEYS = [
-    "profile", "mod_heatmap", "termination", "coverage",
-    "read_hist", "reads_per_block", "snr_scaling",
-    "mi", "correlation", "pairwise_coverage",
-]
+# Above this reference count, the report omits per-sequence data (dropdown /
+# multi-plot / difference) to keep the embedded HTML bounded; aggregate plots
+# are always included.
+EMBED_REF_CAP = 100
 
 
 # --- Dataclasses ---
@@ -158,29 +155,6 @@ def fastq_stem(path: str) -> str:
 
 def file_size_mb(path: str) -> float:
     return os.path.getsize(path) / (1024 * 1024)
-
-
-def build_seq_names(n: int, sequences: list[str] | None) -> list[str]:
-    """Build display labels for the sequence selector, disambiguating
-    truncated duplicates."""
-    raw: list[str] = []
-    for i in range(n):
-        seq = sequences[i] if sequences and i < len(sequences) else None
-        if seq and len(seq) > 50:
-            raw.append(seq[:50] + "...")
-        elif seq:
-            raw.append(seq)
-        else:
-            raw.append(f"Sequence {i + 1}")
-    counts: dict[str, int] = {}
-    out: list[str] = []
-    for label in raw:
-        if raw.count(label) > 1:
-            counts[label] = counts.get(label, 0) + 1
-            out.append(f"{label} (#{counts[label]})")
-        else:
-            out.append(label)
-    return out
 
 
 # --- CLI command builders ---
@@ -348,101 +322,6 @@ def _build_defattrs(
     return defattr_paths, "\n".join(blocks)
 
 
-# --- Plot building ---
-
-
-def _build_plots_for_group(
-    mod, nomod, combined,
-    group_name: str,
-    sequence: str | None,
-) -> dict[str, go.Figure | None]:
-    """Build every diagnostic plot for one group. Returns key -> Figure or
-    None when the underlying data is absent."""
-    from cmuts.visualize.plotly import (
-        plot_correlation, plot_coverage, plot_reads_per_block, plot_examples,
-        plot_heatmap, plot_mi, plot_pairwise_coverage,
-        plot_read_hist, plot_snr_scaling, plot_termination,
-    )
-
-    plots: dict[str, go.Figure | None] = {}
-    plots["profile"] = plot_examples(
-        np.asarray(combined.reactivity), np.asarray(combined.error),
-        group_name, sequence=sequence,
-    )
-    plots["mod_heatmap"] = plot_heatmap(np.asarray(combined.heatmap), group_name)
-    plots["termination"] = plot_termination(np.asarray(combined.terminations), group_name)
-    plots["coverage"] = plot_coverage(
-        np.asarray(combined.coverage), np.asarray(combined.reads), group_name,
-    )
-
-    is_multi = not combined.single()
-    reads = np.asarray(combined.reads)
-    plots["read_hist"] = plot_read_hist(reads, group_name) if is_multi else None
-    plots["reads_per_block"] = plot_reads_per_block(reads, group_name) if is_multi else None
-
-    # plot_snr_scaling materializes an (xi, refs, len) array that explodes
-    # in RAM for large reference counts. Restrict to single-reference runs.
-    if combined.single():
-        plots["snr_scaling"] = plot_snr_scaling(mod, nomod, combined, group_name)
-    else:
-        plots["snr_scaling"] = None
-
-    plots["mi"] = (
-        plot_mi(np.asarray(combined.mi)[0], group_name)
-        if combined.mi is not None else None
-    )
-    plots["correlation"] = (
-        plot_correlation(np.asarray(combined.covariance)[0], group_name)
-        if combined.covariance is not None else None
-    )
-    if combined.probability is not None:
-        prob = np.asarray(combined.probability)
-        plots["pairwise_coverage"] = plot_pairwise_coverage(prob[0, :, :, 1, 1], group_name)
-    else:
-        plots["pairwise_coverage"] = None
-    return plots
-
-
-def _save_plot_json(fig: go.Figure | None, path: str) -> bool:
-    if fig is None:
-        return False
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write(fig.to_json())
-    return True
-
-
-def _build_stats_for_group(grp, ref_count: int) -> list[list[str]]:
-    reactivity = np.array(grp["reactivity"])
-    reads = np.array(grp["reads"])
-    error = np.array(grp["error"])
-    snr = np.array(grp["SNR"])
-
-    n_refs = reactivity.shape[0]
-    seq_len = reactivity.shape[1]
-    total_reads = int(reads.sum())
-    valid = np.isfinite(reactivity)
-
-    rows: list[list[str]] = [
-        ["References", f"{n_refs:,}"],
-        ["Reference length", f"{seq_len:,}"],
-        ["Total reads", f"{total_reads:,}"],
-        ["Mean reads per reference", f"{np.mean(reads):,.1f}"],
-        ["Median reads per reference", f"{int(np.median(reads)):,}"],
-    ]
-    if valid.any():
-        rows.extend([
-            ["Mean reactivity", f"{np.mean(reactivity[valid]):.3f}"],
-            ["Mean error", f"{np.mean(error[valid]):.3f}"],
-            ["Mean SNR", f"{np.mean(snr):.2f}"],
-            ["SNR > 1", f"{np.mean(snr > 1):.1%}"],
-        ])
-    dropout = float(np.mean(reads == 0))
-    if dropout > 0:
-        rows.append(["Dropout fraction", f"{dropout:.1%}"])
-    return rows
-
-
 # --- Results persistence + cleanup ---
 
 
@@ -487,113 +366,6 @@ def read_meta(job_dir: str) -> dict | None:
 def write_log(job_dir: str, log_lines: list[str]) -> None:
     with open(os.path.join(job_dir, "log.txt"), "w") as f:
         f.write("\n".join(log_lines))
-
-
-# --- On-demand plot generation (sequence switching) ---
-
-
-def build_profile_plot(job_dir: str, group_name: str, seq_idx: int) -> str | None:
-    """Build a profile plot JSON on demand for a given group/sequence.
-
-    The plot's title uses the group name (for consistency with the rest
-    of the per-group tiles); the sequence identity is conveyed by the
-    sequence dropdown selection, not the title.
-    """
-    from cmuts.visualize.plotly import plot_profile
-
-    h5_path = os.path.join(job_dir, "profiles.h5")
-    if not os.path.isfile(h5_path):
-        return None
-    with h5py.File(h5_path, "r") as f:
-        if group_name not in f:
-            return None
-        grp = f[group_name]
-        reactivity = np.array(grp["reactivity"])
-        error = np.array(grp["error"])
-        sequences = None
-        if "sequence" in f:
-            sequences = [
-                s.decode() if isinstance(s, bytes) else s for s in f["sequence"]
-            ]
-    if seq_idx < 0 or seq_idx >= reactivity.shape[0]:
-        return None
-    seq = sequences[seq_idx] if sequences and seq_idx < len(sequences) else None
-    fig = plot_profile(reactivity[seq_idx], error[seq_idx], group_name, sequence=seq)
-    return fig.to_json()
-
-
-def build_diff_plot(job_dir: str, group_a: str, group_b: str) -> str | None:
-    """Build a plot of (group_a − group_b) reactivity over positions.
-
-    Only valid for single-reference runs. Errors are propagated as
-    sqrt(err_a^2 + err_b^2). Returns None if either group is missing
-    or the underlying data is multi-reference.
-    """
-    from cmuts.visualize.plotly import plot_profile
-
-    h5_path = os.path.join(job_dir, "profiles.h5")
-    if not os.path.isfile(h5_path):
-        return None
-    with h5py.File(h5_path, "r") as f:
-        if group_a not in f or group_b not in f:
-            return None
-        ra = np.array(f[group_a]["reactivity"])
-        rb = np.array(f[group_b]["reactivity"])
-        ea = np.array(f[group_a]["error"])
-        eb = np.array(f[group_b]["error"])
-        if ra.shape[0] != 1 or rb.shape[0] != 1:
-            return None
-        sequences = None
-        if "sequence" in f:
-            sequences = [
-                s.decode() if isinstance(s, bytes) else s for s in f["sequence"]
-            ]
-    seq = sequences[0] if sequences else None
-    diff = ra[0] - rb[0]
-    err = np.sqrt(ea[0] ** 2 + eb[0] ** 2)
-    fig = plot_profile(diff, err, f"{group_a} − {group_b}", sequence=seq)
-    return fig.to_json()
-
-
-def build_perref_plot(
-    job_dir: str, group_name: str, key: str, seq_idx: int,
-) -> str | None:
-    """Rebuild a per-reference plot (mi / correlation / pairwise_coverage)
-    for a different reference. Returns None if not available."""
-    from cmuts.visualize.plotly import (
-        plot_correlation, plot_mi, plot_pairwise_coverage,
-    )
-
-    h5_path = os.path.join(job_dir, "profiles.h5")
-    if not os.path.isfile(h5_path):
-        return None
-    with h5py.File(h5_path, "r") as f:
-        if group_name not in f:
-            return None
-        grp = f[group_name]
-        if key == "mi":
-            if "mutual-information" not in grp:
-                return None
-            arr = np.array(grp["mutual-information"])
-        elif key == "correlation":
-            if "covariance" not in grp:
-                return None
-            arr = np.array(grp["covariance"])
-        elif key == "pairwise_coverage":
-            if "probability" not in grp:
-                return None
-            arr = np.array(grp["probability"])
-        else:
-            return None
-    if seq_idx < 0 or seq_idx >= arr.shape[0]:
-        return None
-    if key == "mi":
-        fig = plot_mi(arr[seq_idx], group_name)
-    elif key == "correlation":
-        fig = plot_correlation(arr[seq_idx], group_name)
-    else:  # pairwise_coverage
-        fig = plot_pairwise_coverage(arr[seq_idx, :, :, 1, 1], group_name)
-    return fig.to_json()
 
 
 # --- Main pipeline ---
@@ -739,62 +511,30 @@ def run_pipeline(
             log(f"  Pooled {norm_cfg.norm_method} normalization across {len(results)} experiments.")
         log("Normalization complete.")
 
-        # Save the combined HDF5 + CSV.
+        # Save the reactivity HDF5 with reference names and SNR curves, then the
+        # CSV. This mirrors `cmuts normalize` so `cmuts.report.build` can
+        # regenerate every figure from the file alone.
         final_h5 = os.path.join(job_dir, "profiles.h5")
-        _cmuts.save_groups(final_h5, [(r.experiment.name, r.combined) for r in results])
-
         group_names = [r.experiment.name for r in results]
+        fasta_entries = parse_fasta(fasta_path)
+        ref_names = [name for name, _ in fasta_entries]
+        _cmuts.save_groups(
+            final_h5, [(r.experiment.name, r.combined) for r in results], names=ref_names,
+        )
+        for r in results:
+            _cmuts.compute_snr_curves(r.mod, r.nomod, r.combined).save(r.experiment.name, final_h5)
+
         csv_path = _generate_csv(final_h5, fasta_path, group_names)
-        # Move CSV next to HDF5.
         final_csv = os.path.join(job_dir, "profiles.csv")
         if csv_path != final_csv:
             shutil.move(csv_path, final_csv)
         log("Wrote profiles.h5 and profiles.csv.")
 
-        # Sequence names + single-ref check.
-        fasta_entries = parse_fasta(fasta_path)
-        first_combined = results[0].combined
-        single_ref = bool(first_combined.single()) and len(fasta_entries) == 1
+        ref_count = int(np.asarray(results[0].combined.reactivity).shape[0])
+
+        # Optional CIF visualization (per-group defattrs) needs a single reference.
+        single_ref = ref_count == 1 and len(fasta_entries) == 1
         ref_sequence = fasta_entries[0][1] if single_ref else None
-        sequence_names_per_group: dict[str, list[str]] = {}
-
-        # Per-group plots: profile, heatmap, termination, coverage, ... (first ref).
-        # Each plot is wrapped so a single failure (memory blow-up on a
-        # pathological dataset, etc.) just skips that tile.
-        for r in results:
-            gname = r.experiment.name
-            group_plot_dir = os.path.join(job_dir, "groups", gname)
-            os.makedirs(group_plot_dir, exist_ok=True)
-            plots = _build_plots_for_group(
-                r.mod, r.nomod, r.combined, gname, sequence=ref_sequence,
-            )
-            for key, fig in plots.items():
-                _save_plot_json(fig, os.path.join(group_plot_dir, f"{key}.json"))
-
-        # Combined profile across groups (only when single-ref + >1 group).
-        has_combined = False
-        if single_ref and len(results) > 1:
-            from cmuts.visualize.plotly import plot_profiles
-            reactivities = [np.asarray(r.combined.reactivity)[0] for r in results]
-            combined_fig = plot_profiles(reactivities, group_names)
-            _save_plot_json(combined_fig, os.path.join(job_dir, "combined_profile.json"))
-            has_combined = True
-
-        # Per-group sequence names + stats.
-        stats: dict[str, list[list[str]]] = {}
-        with h5py.File(final_h5, "r") as f:
-            sequences = None
-            if "sequence" in f:
-                sequences = [
-                    s.decode() if isinstance(s, bytes) else s for s in f["sequence"]
-                ]
-            for gname in group_names:
-                reactivity = np.array(f[gname]["reactivity"])
-                seq_names = build_seq_names(reactivity.shape[0], sequences)
-                sequence_names_per_group[gname] = seq_names
-                stats[gname] = _build_stats_for_group(f[gname], reactivity.shape[0])
-
-        # Optional CIF visualization (per-group defattrs).
         defattr_files: list[str] = []
         chimerax_md = ""
         if cif_path is not None and ref_sequence is not None:
@@ -813,15 +553,21 @@ def run_pipeline(
                 "a single-reference FASTA."
             )
 
+        # Render the self-contained HTML report. Per-sequence data (dropdown,
+        # multi-plot, difference) is embedded only for small runs; a failure here
+        # still leaves the HDF5/CSV downloads intact.
+        try:
+            html = _cmuts.report.build(final_h5, embed_all=(ref_count <= EMBED_REF_CAP))
+            with open(os.path.join(job_dir, "report.html"), "w") as fh:
+                fh.write(html)
+            log("Wrote report.html.")
+        except Exception as e:  # noqa: BLE001
+            log(f"Warning: report generation failed ({e}); downloads are still available.")
+
         meta = {
             "job_id": job_id,
             "group_names": group_names,
-            "sequence_names": sequence_names_per_group,
-            "single_ref": single_ref,
-            "has_combined_profile": has_combined,
-            "ref_count": int(np.array(results[0].combined.reactivity).shape[0]),
-            "is_pairwise": core_cfg.compute_pairwise,
-            "stats": stats,
+            "ref_count": ref_count,
             "defattr_files": defattr_files,
             "chimerax_md": chimerax_md,
             "created_at": time.time(),

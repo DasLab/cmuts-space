@@ -60,110 +60,16 @@
     </div>
   </section>
 
-  {% if meta.has_combined_profile %}
+  {% if has_report %}
+  <iframe class="report-frame" src="/results/{{ job_id }}/report" title="cmuts report"></iframe>
+  {% else %}
   <section class="card">
-    <h2>Combined reactivity profile</h2>
-    <div id="plot-combined" class="plot"></div>
-  </section>
-  <section class="card">
-    <h2>Profile difference</h2>
-    <div class="selectors">
-      <label>A
-        <select id="diff-a">
-          {% for gn in meta.group_names %}
-            <option value="{{ gn }}">{{ gn }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <span class="muted">−</span>
-      <label>B
-        <select id="diff-b">
-          {% for gn in meta.group_names %}
-            <option value="{{ gn }}">{{ gn }}</option>
-          {% endfor %}
-        </select>
-      </label>
-    </div>
-    <div id="plot-diff" class="plot"></div>
+    <p>The report could not be generated for this run. The data downloads above are
+       still available; see the log below for details.</p>
   </section>
   {% endif %}
 
-  <section class="card">
-    <h2>Per-group diagnostics</h2>
-
-    <div class="selectors">
-      <label>Group
-        <select id="group-select">
-          {% for gn in meta.group_names %}
-            <option value="{{ gn }}">{{ gn }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label id="seq-select-wrapper" style="display:none">Sequence
-        <select id="seq-select"></select>
-      </label>
-    </div>
-
-    <h3>Summary statistics</h3>
-    <table class="stats" id="stats-table"></table>
-
-    <div class="plot-tile plot-full" data-key="profile">
-      <h3>Reactivity profile</h3>
-      <div class="plot"></div>
-    </div>
-
-    <div class="plot-row">
-      <div class="plot-tile" data-key="mod_heatmap">
-        <h3>Modification heatmap</h3>
-        <div class="plot"></div>
-      </div>
-      <div class="plot-tile" data-key="coverage">
-        <h3>Coverage by position</h3>
-        <div class="plot"></div>
-      </div>
-    </div>
-
-    <div class="plot-row">
-      <div class="plot-tile" data-key="read_hist">
-        <h3>Read depth distribution</h3>
-        <div class="plot"></div>
-      </div>
-      <div class="plot-tile" data-key="reads_per_block">
-        <h3>Mean reads per reference bin</h3>
-        <div class="plot"></div>
-      </div>
-    </div>
-
-    <details class="additional-plots">
-      <summary>Additional plots</summary>
-      <div class="plot-row">
-        <div class="plot-tile" data-key="termination">
-          <h3>Termination by position</h3>
-          <div class="plot"></div>
-        </div>
-        <div class="plot-tile" data-key="snr_scaling">
-          <h3>SNR vs read depth</h3>
-          <div class="plot"></div>
-        </div>
-      </div>
-      <div class="plot-row">
-        <div class="plot-tile" data-key="mi">
-          <h3>Mutual information</h3>
-          <div class="plot"></div>
-        </div>
-        <div class="plot-tile" data-key="correlation">
-          <h3>Correlation</h3>
-          <div class="plot"></div>
-        </div>
-      </div>
-      <div class="plot-tile plot-full" data-key="pairwise_coverage">
-        <h3>Pairwise coverage</h3>
-        <div class="plot"></div>
-      </div>
-    </details>
-  </section>
-
-  {% if meta.chimerax_md %}
+  {% if meta and meta.chimerax_md %}
   <section class="card">
     <h2>Structure visualization</h2>
     <pre class="markdown">{{ meta.chimerax_md }}</pre>
@@ -180,8 +86,6 @@
     <pre class="log">{{ log }}</pre>
   </details>
 
-  <script id="meta-data" type="application/json">{{ meta | tojson }}</script>
-  <script src="/static/results.js?v={{ asset_version }}" defer></script>
   <script>
     function copyUrl() {
       const input = document.getElementById('result-url');
