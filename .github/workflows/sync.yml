@@ -1,7 +1,8 @@
 name: Sync HF Space
 
 # Pushes every commit on main to the Hugging Face space, which builds and
-# deploys it. GitHub is the source of truth; never push to the space directly.
+# deploys it, then waits for that build and fails if it does. GitHub is the
+# source of truth; never push to the space directly.
 
 on:
   push:
@@ -21,5 +22,28 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           git push --force \
-            "https://hmblair:$HF_TOKEN@huggingface.co/spaces/daslab-stanford/cmuts" \
+            "https://hamishmilsonblair:$HF_TOKEN@huggingface.co/spaces/daslab-stanford/cmuts" \
             main
+
+      # The push returns before Hugging Face builds, so a green push alone
+      # does not mean a working space. Poll until the pushed commit reaches a
+      # terminal stage: RUNNING passes, an error stage or a stale build fails.
+      - name: Wait for the space to build
+        run: |
+          deadline=$((SECONDS + 1500))
+          while [ $SECONDS -lt $deadline ]; do
+            state=$(curl -s https://huggingface.co/api/spaces/daslab-stanford/cmuts \
+              | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("sha",""), d.get("runtime",{}).get("stage",""))')
+            sha=${state% *}
+            stage=${state#* }
+            echo "$stage at ${sha::8}"
+            if [ "$sha" = "$GITHUB_SHA" ]; then
+              case "$stage" in
+                RUNNING) exit 0 ;;
+                *ERROR*) echo "the space build failed: $stage"; exit 1 ;;
+              esac
+            fi
+            sleep 20
+          done
+          echo "timed out waiting for the space to build"
+          exit 1
