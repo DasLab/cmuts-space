@@ -1,38 +1,86 @@
 name: Sync HF Space
 
-# Pushes every commit on main to the Hugging Face space, which builds and
-# deploys it, then waits for that build and fails if it does. GitHub is the
-# source of truth; never push to the space directly.
+# Deploys main to the Hugging Face space, gated by smoke checks: the image is
+# built and exercised on the runner first, the push then waits for the space
+# to build, and the deployment is exercised again before the run counts as a
+# success. GitHub is the source of truth; never push to the space directly.
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: sync-hf
+  cancel-in-progress: false
+
+env:
+  SPACE: daslab-stanford/cmuts
+  SPACE_HOST: daslab-stanford-cmuts.hf.space
+
 jobs:
-  sync:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: cmuts-space:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start the container
+        run: docker run -d --name space -p 7860:7860 cmuts-space:ci
+
+      - name: Wait for the app to answer
+        run: |
+          for _ in $(seq 60); do
+            curl -sf -o /dev/null http://127.0.0.1:7860/ && exit 0
+            sleep 2
+          done
+          echo "the app never answered"
+          exit 1
+
+      - name: Run the examples against the container
+        run: scripts/smoke.sh http://127.0.0.1:7860
+
+      - name: Show the container log on failure
+        if: failure()
+        run: docker logs space
+
+  deploy:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
+
       - name: Push to the space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           git push --force \
-            "https://hamishmilsonblair:$HF_TOKEN@huggingface.co/spaces/daslab-stanford/cmuts" \
+            "https://hamishmilsonblair:$HF_TOKEN@huggingface.co/spaces/$SPACE" \
             main
 
-      # The push returns before Hugging Face builds, so a green push alone
-      # does not mean a working space. Poll until the pushed commit reaches a
-      # terminal stage: RUNNING passes, an error stage or a stale build fails.
+      # The push returns before Hugging Face builds. Poll until the pushed
+      # commit reaches a terminal stage: RUNNING passes, an error stage or a
+      # stale build fails.
       - name: Wait for the space to build
         run: |
           deadline=$((SECONDS + 1500))
           while [ $SECONDS -lt $deadline ]; do
-            state=$(curl -s https://huggingface.co/api/spaces/daslab-stanford/cmuts \
+            state=$(curl -s "https://huggingface.co/api/spaces/$SPACE" \
               | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("sha",""), d.get("runtime",{}).get("stage",""))')
             sha=${state% *}
             stage=${state#* }
@@ -47,3 +95,6 @@ jobs:
           done
           echo "timed out waiting for the space to build"
           exit 1
+
+      - name: Run the examples against the deployment
+        run: scripts/smoke.sh "https://$SPACE_HOST"

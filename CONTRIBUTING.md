@@ -34,7 +34,7 @@ The Dockerfile pins cmuts by commit through the `CMUTS_SHA` build argument. The 
 
 The GitHub repository ([DasLab/cmuts-space](https://github.com/DasLab/cmuts-space)) is the source of truth. Push only to GitHub.
 
-The `Sync HF Space` workflow force-pushes every commit on `main` to the [Hugging Face space](https://huggingface.co/spaces/daslab-stanford/cmuts), which builds the Dockerfile and deploys it. Do not push to the space directly; a direct push is overwritten by the next sync. The workflow needs a repository secret named `HF_TOKEN` holding a Hugging Face token with write access to the space.
+The `Sync HF Space` workflow deploys every commit on `main` to the [Hugging Face space](https://huggingface.co/spaces/daslab-stanford/cmuts). It first builds the Docker image on the runner and runs the bundled examples against it (`scripts/smoke.sh`); only on success does it push to the space, wait for the build there, and run the examples once more against the deployment. A failure at any stage fails the run and leaves the previous deployment serving. Do not push to the space directly; a direct push is overwritten by the next sync. The workflow needs a repository secret named `HF_TOKEN` holding a Hugging Face token with write access to the space.
 
 The pin workflow in DasLab/cmuts needs a `SPACE_TOKEN` secret there: a fine-grained token with contents write access to this repository only. The current token expires on September 12, 2027, and must be refreshed then.
 
