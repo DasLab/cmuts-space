@@ -84,7 +84,8 @@ async def _lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="cmuts", lifespan=_lifespan)
+app = FastAPI(title="cmuts", lifespan=_lifespan,
+              docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
