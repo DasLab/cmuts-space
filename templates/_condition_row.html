@@ -1,0 +1,25 @@
+<div class="condition-row">
+  <div class="condition-head">
+    <input type="text" name="cond-{{ index }}-name"
+           placeholder="Condition name (e.g. 2A3)">
+    <button type="button" class="remove-row"
+            onclick="this.closest('.condition-row').remove()">Remove</button>
+  </div>
+  <div class="condition-files">
+    <label class="file-pick">
+      <span>Treated reads (required)</span>
+      <input type="file" name="cond-{{ index }}-treated" multiple
+             accept=".fastq,.fq,.gz,.bam">
+    </label>
+    <label class="file-pick">
+      <span>Untreated background (optional)</span>
+      <input type="file" name="cond-{{ index }}-untreated" multiple
+             accept=".fastq,.fq,.gz,.bam">
+    </label>
+    <label class="file-pick">
+      <span>Denatured control (optional)</span>
+      <input type="file" name="cond-{{ index }}-denatured" multiple
+             accept=".fastq,.fq,.gz,.bam">
+    </label>
+  </div>
+</div>

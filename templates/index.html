@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% from "_option.html" import option_field %}
+{% block content %}
+<section class="intro">
+  <h1>cmuts — MaP-seq analysis</h1>
+  <p>
+    Upload a FASTA reference and sequencing reads from a MaP-seq experiment
+    to compute normalized reactivity profiles.
+  </p>
+</section>
+
+<form id="run-form" method="post" action="/run" enctype="multipart/form-data">
+  <fieldset class="card">
+    <legend>Reference</legend>
+    <label class="file-pick">
+      <span>Reference FASTA (required)</span>
+      <input type="file" name="fasta" accept=".fasta,.fa" required>
+    </label>
+  </fieldset>
+
+  <fieldset class="card">
+    <legend>Conditions</legend>
+    <p class="hint">Each slot takes one FASTQ or unaligned BAM, or two FASTQs for paired-end reads.
+       At most {{ max_conditions }} conditions per run.</p>
+    <div id="conditions">
+      {% with index = 0 %}{% include "_condition_row.html" %}{% endwith %}
+    </div>
+    <div class="row-actions">
+      <button type="button" class="secondary" onclick="addConditionRow()">+ Add condition</button>
+      <button type="button" class="secondary"
+              onclick="document.getElementById('example-form-single').submit()">Run single-reference example</button>
+      <button type="button" class="secondary"
+              onclick="document.getElementById('example-form-multi').submit()">Run multi-reference example</button>
+    </div>
+  </fieldset>
+
+  <fieldset class="card">
+    <legend>Options</legend>
+    <p class="hint">Hover an option for its description. Defaults come from the installed cmuts.</p>
+    {% if required_options %}
+    <div class="grid">
+      {% for opt in required_options %}{{ option_field(opt) }}{% endfor %}
+    </div>
+    {% endif %}
+    {% for section in sections %}
+    <details>
+      <summary>{{ section.group }}</summary>
+      <div class="grid">
+        {% for opt in section.options %}{{ option_field(opt) }}{% endfor %}
+      </div>
+    </details>
+    {% endfor %}
+  </fieldset>
+
+  <div class="submit-row">
+    <button type="submit" class="primary">Run pipeline</button>
+  </div>
+</form>
+
+<form id="example-form-single" method="post" action="/run-example/single-ref" style="display:none"></form>
+<form id="example-form-multi" method="post" action="/run-example/multi-ref" style="display:none"></form>
+
+<p class="hint">Files larger than {{ max_upload_mb }} MB are rejected. Results persist for {{ ttl_hours }} hours.</p>
+{% endblock %}

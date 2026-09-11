@@ -1,0 +1,25 @@
+name: Sync HF Space
+
+# Pushes every commit on main to the Hugging Face space, which builds and
+# deploys it. GitHub is the source of truth; never push to the space directly.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+      - name: Push to the space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git push --force \
+            "https://hmblair:$HF_TOKEN@huggingface.co/spaces/daslab-stanford/cmuts" \
+            main

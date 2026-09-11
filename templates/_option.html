@@ -1,0 +1,49 @@
+{# One form field for one dumped option. The widget key comes from
+   options.annotate; the help string becomes the tooltip. #}
+{% macro choice_text(opt, choice) -%}
+  {%- if opt.choice_labels.get(choice) -%}
+    {{ opt.choice_labels[choice] }} ({{ choice }})
+  {%- else -%}
+    {{ choice }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro option_field(opt) %}
+  {% if opt.widget == "flag" %}
+    <label class="check" title="{{ opt.help }}">
+      <input type="checkbox" name="{{ opt.field }}"
+             {% if opt.default %}checked{% endif %}>
+      {{ opt.label }}
+    </label>
+  {% elif opt.widget == "set" %}
+    <div class="set-field" title="{{ opt.help }}">
+      <span class="set-label">{{ opt.label }}</span>
+      {% for choice in opt.choices %}
+        <label class="check">
+          <input type="checkbox" name="{{ opt.field }}" value="{{ choice }}"
+                 {% if choice in opt.default_set %}checked{% endif %}>
+          {{ choice_text(opt, choice) }}
+        </label>
+      {% endfor %}
+    </div>
+  {% elif opt.widget == "select" %}
+    <label title="{{ opt.help }}">{{ opt.label }}{% if opt.required %} (required){% endif %}
+      <select name="{{ opt.field }}" {% if opt.required %}required{% endif %}>
+        {% if opt.default is none %}
+          <option value="" disabled selected>select&hellip;</option>
+        {% endif %}
+        {% for choice in opt.choices %}
+          <option value="{{ choice }}"
+                  {% if choice == opt.default %}selected{% endif %}>{{ choice_text(opt, choice) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  {% else %}
+    <label title="{{ opt.help }}">{{ opt.label }}
+      <input type="number" name="{{ opt.field }}"
+             value="{{ opt.default }}" step="{{ opt.step }}"
+             {% if opt.minimum is not none %}min="{{ opt.minimum }}"{% endif %}
+             {% if opt.maximum is not none %}max="{{ opt.maximum }}"{% endif %}>
+    </label>
+  {% endif %}
+{% endmacro %}

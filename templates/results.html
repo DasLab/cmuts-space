@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if status == "missing" %}
+  <section class="card">
+    <h1>Result not found</h1>
+    <p>This job ID is unknown, or the results have expired
+       (kept for {{ ttl_hours }} hours).</p>
+    <p><a href="/">Return to the form</a></p>
+  </section>
+
+{% elif status == "running" %}
+  <section class="card">
+    <h1>Running — job {{ job_id }}</h1>
+    <p>This page reloads automatically when the pipeline finishes.</p>
+    <details open>
+      <summary>Log</summary>
+      <pre id="live-log" class="log" data-job="{{ job_id }}">{{ log }}</pre>
+    </details>
+  </section>
+
+{% elif status == "error" %}
+  <section class="card error">
+    <h1>Pipeline failed — job {{ job_id }}</h1>
+    <p class="error-msg">{{ error or "See log for details." }}</p>
+    <details open>
+      <summary>Log</summary>
+      <pre class="log">{{ log }}</pre>
+    </details>
+    <p><a href="/">Return to the form</a></p>
+  </section>
+
+{% else %}
+  <section class="results-header">
+    <div>
+      <h1>Results — job {{ job_id }}</h1>
+      <p class="muted">Bookmark to come back later (kept for {{ ttl_hours }} hours):</p>
+      <div class="copy-url">
+        <input id="result-url" type="text" readonly value="{{ request.url }}">
+        <button type="button" onclick="copyUrl(event)">Copy</button>
+      </div>
+    </div>
+    <div class="header-actions">
+      {% for condition in meta.conditions %}
+        <a class="button" href="/results/{{ job_id }}/download/{{ condition.tag }}.h5">{{ condition.name }}.h5</a>
+        <a class="button" href="/results/{{ job_id }}/download/{{ condition.tag }}.csv">{{ condition.name }}.csv</a>
+      {% endfor %}
+      <a class="button primary" href="/results/{{ job_id }}/download/all">Download all</a>
+    </div>
+  </section>
+
+  <iframe class="report-frame" src="/results/{{ job_id }}/report/" title="cmuts report"></iframe>
+
+  <details class="card">
+    <summary><h2 style="display:inline">Log</h2></summary>
+    <pre class="log">{{ log }}</pre>
+  </details>
+{% endif %}
+
+{% endblock %}
