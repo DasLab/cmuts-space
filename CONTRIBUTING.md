@@ -9,6 +9,8 @@ uv venv .venv
 uv sync
 ```
 
+Each bundled example holds a `settings.json` naming the options it runs with. A dataset without one is refused, so the server never picks an option on an example's behalf.
+
 The example FASTQ files go through Git LFS (see `.gitattributes`), so a clone needs `git lfs` installed.
 
 ## Running locally

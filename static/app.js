@@ -113,3 +113,63 @@ function downloadReport(event) {
   const html = reportSnapshot(doc);
   saveBlob(new Blob([html], { type: "text/html" }), `${button.dataset.job}-report.html`);
 }
+
+// --- Loading a settings file into the form ---
+
+// Writes one value into one control, and reports whether the control moved.
+// A set option shares its field name across several checkboxes, so a list
+// checks each box the list names.
+function applySetting(control, value) {
+  const box = control.type === "checkbox";
+  const before = box ? control.checked : control.value;
+  if (box && Array.isArray(value)) control.checked = value.includes(control.value);
+  else if (box) control.checked = Boolean(value);
+  else control.value = String(value);
+  return (box ? control.checked : control.value) !== before;
+}
+
+// Opens the sections holding a control, so a loaded setting is never hidden.
+function revealControl(control) {
+  let section = control.closest("details");
+  while (section) {
+    section.open = true;
+    section = section.parentElement.closest("details");
+  }
+}
+
+function applySettings(fields) {
+  const form = document.getElementById("run-form");
+  Object.keys(fields).forEach((name) => {
+    form.querySelectorAll(`[name="${name}"]`).forEach((control) => {
+      if (applySetting(control, fields[name])) revealControl(control);
+    });
+  });
+}
+
+function showSettingsError(message) {
+  const box = document.getElementById("settings-error");
+  box.textContent = message;
+  box.hidden = message === "";
+}
+
+// Sends the chosen file to the server, which holds the option dumps, and
+// writes the fields it answers with into the form. A refused file changes
+// nothing, so the form never holds half of one.
+function loadSettings(input) {
+  const file = input.files[0];
+  input.value = "";
+  if (!file) return;
+  const body = new FormData();
+  body.append("settings", file);
+  fetch("/settings", { method: "POST", body })
+    .then((response) => response.json().then((data) => ({ response, data })))
+    .then(({ response, data }) => {
+      if (!response.ok) {
+        showSettingsError(data.detail || "The settings file was refused.");
+        return;
+      }
+      applySettings(data.fields);
+      showSettingsError("");
+    })
+    .catch(() => showSettingsError("The settings file could not be read."));
+}

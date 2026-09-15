@@ -37,6 +37,12 @@
   <fieldset class="card">
     <legend>Options</legend>
     <p class="hint">Hover an option for its description.</p>
+    {# The input carries no name, so the file never travels with the run. #}
+    <label class="file-pick">
+      <span>Load settings from a file</span>
+      <input type="file" accept=".json,application/json" onchange="loadSettings(this)">
+    </label>
+    <p id="settings-error" class="error-msg" hidden></p>
     {% if required_options %}
     <div class="grid">
       {% for opt in required_options %}{{ option_field(opt) }}{% endfor %}

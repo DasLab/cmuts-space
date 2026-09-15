@@ -10,6 +10,7 @@ On-disk job layout::
         {condition}.h5    final normalized output, one per condition
         {condition}.csv   the same output as CSV
         meta.json         status and condition names
+        settings.json     every option the run used
         log.txt           the streaming log
         uploads/          the staged inputs (skipped by the zip download)
         work/             intermediate BAMs and rates (deleted on success)
@@ -36,6 +37,9 @@ _default_results_dir = (
     "/data/results" if os.path.isdir("/data") else "/tmp/cmuts-space-results"
 )
 RESULTS_DIR = os.environ.get("CMUTS_RESULTS_DIR", _default_results_dir)
+
+# The settings one job used, written at submission and offered as a download.
+SETTINGS_FILE = "settings.json"
 
 # The performance arguments the server sets on each subcommand.
 SERVER_ARGS = {
@@ -77,6 +81,11 @@ def job_dir_for(job_id: str) -> str:
 def write_meta(job_dir: str, meta: dict) -> None:
     with open(os.path.join(job_dir, "meta.json"), "w") as f:
         json.dump(meta, f)
+
+
+def write_settings(job_dir: str, settings: dict) -> None:
+    with open(os.path.join(job_dir, SETTINGS_FILE), "w") as f:
+        json.dump(settings, f, indent=2)
 
 
 def read_meta(job_dir: str) -> dict | None:

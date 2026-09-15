@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 import re
 import shutil
@@ -39,6 +40,7 @@ from pipeline import (
     MAX_CONDITIONS,
     MAX_UPLOAD_MB,
     RESULTS_TTL_HOURS,
+    SETTINGS_FILE,
     ConditionInput,
     JobState,
     job_dir_for,
@@ -110,6 +112,10 @@ CONDITION_ROLES = ("treated", "untreated", "denatured")
 
 UPLOAD_CHUNK_BYTES = 1 << 20
 
+# A settings file holds one small JSON object; anything larger is refused
+# before it is parsed.
+SETTINGS_MAX_BYTES = 1 << 20
+
 
 # --- Helpers ---
 
@@ -166,6 +172,10 @@ def _stage_condition(form: FormData, index: int, uploads_dir: str) -> ConditionI
     name = (form.get(f"cond-{index}-name") or "").strip() or f"condition {index + 1}"
     return ConditionInput(name=name, treated=files["treated"],
                          untreated=files["untreated"], denatured=files["denatured"])
+
+
+def _write_run_settings(job_dir: str, settings: dict) -> None:
+    pipeline.write_settings(job_dir, options.settings_document(SPECS, settings))
 
 
 def _submit_job(background_tasks: BackgroundTasks, job_id: str, job_dir: str,
@@ -251,9 +261,10 @@ async def run(request: Request, background_tasks: BackgroundTasks):
     form = await request.form()
 
     try:
-        extra = options.all_option_args(SPECS, form)
+        settings = options.run_settings(SPECS, options.form_settings(SPECS, form))
     except ValueError as error:
         raise HTTPException(400, str(error))
+    extra = options.all_option_args(SPECS, settings)
 
     job_id = uuid.uuid4().hex[:12]
     job_dir = job_dir_for(job_id)
@@ -263,7 +274,20 @@ async def run(request: Request, background_tasks: BackgroundTasks):
         shutil.rmtree(job_dir, ignore_errors=True)
         raise
 
+    _write_run_settings(job_dir, settings)
     return _submit_job(background_tasks, job_id, job_dir, fasta_path, conditions, extra)
+
+
+def _example_settings(src_dir: str, name: str) -> dict:
+    """The settings one bundled example runs with, read from its own file so
+    no example depends on a default the server chooses for it."""
+    path = os.path.join(src_dir, SETTINGS_FILE)
+    try:
+        with open(path) as f:
+            document = json.load(f)
+        return options.run_settings(SPECS, options.document_settings(SPECS, document))
+    except (OSError, json.JSONDecodeError, ValueError) as error:
+        raise HTTPException(500, f"Example dataset {name}: {error}")
 
 
 @app.post("/run-example/{name}")
@@ -285,6 +309,8 @@ def run_example(name: str, background_tasks: BackgroundTasks):
     if fasta is None or treated is None:
         raise HTTPException(500, f"Example dataset {name} is missing required files.")
 
+    settings = _example_settings(src_dir, name)
+
     job_id = uuid.uuid4().hex[:12]
     job_dir = job_dir_for(job_id)
     uploads_dir = os.path.join(job_dir, "uploads")
@@ -300,8 +326,44 @@ def run_example(name: str, background_tasks: BackgroundTasks):
         treated=[stage(treated)],
         untreated=[stage(untreated)] if untreated else [],
     )]
-    extra = options.all_option_args(SPECS, FormData())
+    _write_run_settings(job_dir, settings)
+    extra = options.all_option_args(SPECS, settings)
     return _submit_job(background_tasks, job_id, job_dir, stage(fasta), conditions, extra)
+
+
+# --- Routes: settings ---
+
+
+def _settings_upload(form: FormData) -> UploadFile:
+    uploads = _real_uploads(form.getlist("settings"))
+    if not uploads:
+        raise HTTPException(400, "No settings file was chosen.")
+    return uploads[0]
+
+
+async def _uploaded_document(upload: UploadFile) -> dict:
+    """The parsed settings file, refused where it is too large to be one or
+    is not JSON at all."""
+    raw = await upload.read(SETTINGS_MAX_BYTES + 1)
+    if len(raw) > SETTINGS_MAX_BYTES:
+        raise HTTPException(400, "The settings file is too large.")
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(400, "The settings file is not valid JSON.")
+
+
+@app.post("/settings", response_class=JSONResponse)
+async def check_settings(request: Request) -> JSONResponse:
+    """Checks an uploaded settings file against the option dumps and answers
+    with the form fields it sets, which the page writes into the form."""
+    form = await request.form()
+    document = await _uploaded_document(_settings_upload(form))
+    try:
+        fields = options.settings_fields(SPECS, document)
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+    return JSONResponse({"fields": fields})
 
 
 # --- Routes: results ---
@@ -322,6 +384,7 @@ def results(request: Request, job_id: str) -> HTMLResponse:
             "job_id": job_id,
             "status": status_,
             "ttl_hours": RESULTS_TTL_HOURS,
+            "settings_file": SETTINGS_FILE,
             "log": log,
             "error": error,
             "meta": read_meta(job_dir_for(job_id)),
@@ -364,7 +427,7 @@ def _output_files(job_id: str) -> list[str]:
     files = []
     for condition in meta.get("conditions", []):
         files.extend([f"{condition['tag']}.h5", f"{condition['tag']}.csv"])
-    return files
+    return files + [SETTINGS_FILE]
 
 
 @app.get("/results/{job_id}/download/all")
