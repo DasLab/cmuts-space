@@ -2,7 +2,7 @@
 
 ## Setting up
 
-The app needs `cmuts` (with `cmuts-align` and `cmuts-plot`) on `PATH`, plus `minimap2`, `samtools`, and `fastp` for alignment, and a Python environment holding the dependencies:
+The app needs `cmuts` (with `cmuts-plot`) on `PATH`, plus `minimap2`, `samtools`, and `fastp` for alignment, and a Python environment holding the dependencies:
 
 ```sh
 uv venv .venv

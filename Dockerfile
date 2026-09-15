@@ -1,6 +1,6 @@
 FROM python:3.12-slim-bookworm
 
-# System dependencies: the cmuts build chain plus the cmuts-align tools.
+# System dependencies: the cmuts build chain plus the programs cmuts align calls.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
