@@ -88,14 +88,17 @@ jobs:
           lfs: true
 
       # The credentials go in a header, not in the URL. This keeps the token
-      # out of the remote and out of any git error message.
+      # out of the remote and out of any git error message. The header is
+      # bound to the Hugging Face URL, because git lfs sends an unbound
+      # header to the storage host as well, which refuses a signed URL that
+      # also carries an Authorization header.
       - name: Push to the space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           header=$(printf 'hamishmilsonblair:%s' "$HF_TOKEN" | base64 -w0)
           echo "::add-mask::$header"
-          git -c http.extraheader="Authorization: Basic $header" \
+          git -c "http.https://huggingface.co/.extraheader=Authorization: Basic $header" \
             push --force "https://huggingface.co/spaces/$SPACE" main
 
       # The push returns before Hugging Face builds. Poll until the pushed
