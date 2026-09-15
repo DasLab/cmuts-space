@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -32,11 +33,50 @@ MAX_CONDITIONS = int(os.environ.get("CMUTS_MAX_CONDITIONS", "5"))
 RESULTS_TTL_HOURS = int(os.environ.get("CMUTS_RESULTS_TTL_HOURS", "72"))
 STEP_TIMEOUT_SEC = int(os.environ.get("CMUTS_STEP_TIMEOUT_SEC", "600"))
 THREADS = int(os.environ.get("CMUTS_THREADS", "2"))
+CLEANUP_INTERVAL_SEC = int(os.environ.get("CMUTS_CLEANUP_INTERVAL_SEC", "3600"))
 
-_default_results_dir = (
-    "/data/results" if os.path.isdir("/data") else "/tmp/cmuts-space-results"
-)
-RESULTS_DIR = os.environ.get("CMUTS_RESULTS_DIR", _default_results_dir)
+# The app tries these directories in order and uses the first one it can
+# write to. Hugging Face mounts persistent storage at /data when the space
+# has it.
+RESULTS_DIR_CANDIDATES = ("/data/results", "/tmp/cmuts-space-results")
+
+
+def _accepts_a_write(path: str) -> bool:
+    """Tests whether the process can write to the directory. Creates the
+    directory if it is missing."""
+    probe = os.path.join(path, ".write-probe")
+    try:
+        os.makedirs(path, exist_ok=True)
+        with open(probe, "w"):
+            pass
+        os.unlink(probe)
+        return True
+    except OSError:
+        return False
+
+
+def _first_writable(candidates: tuple[str, ...]) -> str:
+    """Returns the first candidate that the process can write to. Raises
+    RuntimeError if it can write to none of them."""
+    for path in candidates:
+        if _accepts_a_write(path):
+            return path
+    raise RuntimeError(
+        "the app cannot write to any of these results directories: "
+        + ", ".join(candidates)
+    )
+
+
+def _results_dir() -> str:
+    """Returns the writable results directory. Uses the directory that
+    CMUTS_RESULTS_DIR names, and the candidate list when that variable is not
+    set. The write test lets the app run whether or not persistent storage is
+    attached."""
+    configured = os.environ.get("CMUTS_RESULTS_DIR")
+    return _first_writable((configured,) if configured else RESULTS_DIR_CANDIDATES)
+
+
+RESULTS_DIR = _results_dir()
 
 # The settings one job used, written at submission and offered as a download.
 SETTINGS_FILE = "settings.json"
@@ -115,6 +155,20 @@ def cleanup_old_results() -> None:
         created = meta.get("created_at", 0) if meta else entry.stat().st_mtime
         if created < cutoff:
             shutil.rmtree(entry.path, ignore_errors=True)
+
+
+def start_cleaner() -> None:
+    """Starts a thread that prunes old results. The thread prunes once at
+    startup and then every CLEANUP_INTERVAL_SEC seconds."""
+    def loop() -> None:
+        while True:
+            try:
+                cleanup_old_results()
+            except OSError:
+                pass
+            time.sleep(CLEANUP_INTERVAL_SEC)
+
+    threading.Thread(target=loop, daemon=True).start()
 
 
 def safe_name(raw: str | None, fallback: str = "condition") -> str:

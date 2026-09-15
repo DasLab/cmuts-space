@@ -14,6 +14,9 @@ concurrency:
   group: sync-hf
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 env:
   SPACE: daslab-stanford/cmuts
   SPACE_HOST: daslab-stanford-cmuts.hf.space
@@ -36,6 +39,25 @@ jobs:
           tags: cmuts-space:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The space runs with or without persistent storage. These runs confirm
+      # that the results directory matches what /data allows in each case.
+      - name: Check the results directory against /data
+        run: |
+          check() {
+            local want=$1
+            shift
+            local got
+            got=$(docker run --rm "$@" cmuts-space:ci \
+              python3 -c 'import pipeline; print(pipeline.RESULTS_DIR)')
+            [ "$got" = "$want" ] || { echo "expected $want, got $got"; exit 1; }
+            echo "ok: $want"
+          }
+          mkdir -p /tmp/data-writable && chmod 777 /tmp/data-writable
+          mkdir -p /tmp/data-readonly && chmod 555 /tmp/data-readonly
+          check /tmp/cmuts-space-results
+          check /data/results -v /tmp/data-writable:/data
+          check /tmp/cmuts-space-results -v /tmp/data-readonly:/data
 
       - name: Start the container
         run: docker run -d --name space -p 7860:7860 cmuts-space:ci
@@ -65,23 +87,32 @@ jobs:
           fetch-depth: 0
           lfs: true
 
+      # The credentials go in a header, not in the URL. This keeps the token
+      # out of the remote and out of any git error message.
       - name: Push to the space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git push --force \
-            "https://hamishmilsonblair:$HF_TOKEN@huggingface.co/spaces/$SPACE" \
-            main
+          header=$(printf 'hamishmilsonblair:%s' "$HF_TOKEN" | base64 -w0)
+          echo "::add-mask::$header"
+          git -c http.extraheader="Authorization: Basic $header" \
+            push --force "https://huggingface.co/spaces/$SPACE" main
 
       # The push returns before Hugging Face builds. Poll until the pushed
       # commit reaches a terminal stage: RUNNING passes, an error stage or a
-      # stale build fails.
+      # stale build fails. The loop retries a call that does not answer until
+      # the deadline, so one bad response does not fail the run.
       - name: Wait for the space to build
         run: |
+          set -o pipefail
           deadline=$((SECONDS + 1500))
           while [ $SECONDS -lt $deadline ]; do
-            state=$(curl -s "https://huggingface.co/api/spaces/$SPACE" \
-              | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("sha",""), d.get("runtime",{}).get("stage",""))')
+            if ! state=$(curl -sf --max-time 30 "https://huggingface.co/api/spaces/$SPACE" \
+              | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("sha",""), d.get("runtime",{}).get("stage",""))' 2>/dev/null); then
+              echo "the space API did not answer; retrying"
+              sleep 20
+              continue
+            fi
             sha=${state% *}
             stage=${state#* }
             echo "$stage at ${sha::8}"

@@ -9,7 +9,7 @@
 #
 # Author: Hamish M. Blair <hmblair@stanford.edu>
 
-set -eu
+set -euo pipefail
 
 WAIT_SECONDS=900
 POLL_SECONDS=5
@@ -18,20 +18,24 @@ BASE=${1:?usage: smoke.sh BASE_URL [EXAMPLE...]}
 shift
 [ $# -gt 0 ] || set -- single-ref multi-ref
 
+# Prints one field of a JSON body. Fails without a message where the body is
+# not the expected JSON, so a call that does not answer prints no traceback.
 json_field() {
-    python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"
+    python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1" 2>/dev/null
 }
 
 submit() {
-    curl -sf -o /dev/null -w '%{redirect_url}' -X POST "$BASE/run-example/$1"
+    curl -sf --max-time 60 --retry 3 --retry-all-errors --retry-delay 2 \
+        -o /dev/null -w '%{redirect_url}' -X POST "$BASE/run-example/$1"
 }
 
 status_of() {
-    curl -sf "$1/status" | json_field status
+    curl -sf --max-time 30 "$1/status" | json_field status
 }
 
 report_answers() {
-    curl -sf -o /dev/null "$1/report/"
+    curl -sf --max-time 60 --retry 3 --retry-all-errors --retry-delay 2 \
+        -o /dev/null "$1/report/"
 }
 
 # Reports the failure and the job's pipeline log, then exits.
@@ -42,16 +46,20 @@ fail() {
 }
 
 # Polls one job until it leaves the running state; prints the final status,
-# or "timeout" where it never settles.
+# or "timeout" where it never settles. The loop retries a poll that does not
+# answer, so a server that stays unreachable reads as a timeout.
 wait_until_done() {
     local deadline=$((SECONDS + WAIT_SECONDS))
     local state
 
     while [ "$SECONDS" -lt "$deadline" ]; do
-        state=$(status_of "$1")
-        if [ "$state" != running ]; then
-            echo "$state"
-            return
+        if state=$(status_of "$1"); then
+            if [ "$state" != running ]; then
+                echo "$state"
+                return
+            fi
+        else
+            echo "smoke: the status call did not answer; retrying" >&2
         fi
         sleep "$POLL_SECONDS"
     done
@@ -62,6 +70,7 @@ check_example() {
     local job state
 
     job=$(submit "$1") || { echo "smoke: could not submit $1" >&2; exit 1; }
+    [ -n "$job" ] || { echo "smoke: $1 did not redirect to a job" >&2; exit 1; }
     echo "smoke: $1 -> $job"
 
     state=$(wait_until_done "$job")

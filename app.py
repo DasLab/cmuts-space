@@ -80,7 +80,8 @@ def _install_sigterm_handler() -> None:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    pipeline.cleanup_old_results()
+    print(f"cmuts: results directory {pipeline.RESULTS_DIR}", flush=True)
+    pipeline.start_cleaner()
     report.start_reaper()
     _install_sigterm_handler()
     yield
