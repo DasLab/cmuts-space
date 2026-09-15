@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
 
+{# The job this page shows, read by the script that writes it into the URL
+   of the page embedding this app. A job that is gone leaves no marker. #}
+{% if status != "missing" %}<div id="job-marker" data-job="{{ job_id }}" hidden></div>{% endif %}
+
 {% if status == "missing" %}
   <section class="card">
     <h1>Result not found</h1>

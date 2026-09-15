@@ -1,3 +1,24 @@
+// --- The job id in the embedding page's URL ---
+
+// This app is served in a frame on its Hugging Face Space page. The URL of
+// that page is the one the address bar shows and the one a reload asks for.
+// The Space page hands its query string to the frame on load, so a job
+// written there is the job a reload returns to.
+const SPACE_PAGE_ORIGIN = "https://huggingface.co";
+
+function writeJobIntoParentUrl(jobId) {
+  if (window.parent === window) return;
+  window.parent.postMessage(
+    { queryString: jobId ? `?job=${jobId}` : "" },
+    SPACE_PAGE_ORIGIN,
+  );
+}
+
+// Every page runs this. A page with no job clears the query string, so
+// returning to the form does not leave an old job in the URL.
+const jobMarker = document.getElementById("job-marker");
+writeJobIntoParentUrl(jobMarker ? jobMarker.dataset.job : "");
+
 // Adds one condition row, fetched from the server with a fresh index so
 // each row's fields stay distinct.
 let conditionIndex = 0;

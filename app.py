@@ -111,6 +111,10 @@ PROXY_CLIENT = httpx.AsyncClient(timeout=60)
 
 CONDITION_ROLES = ("treated", "untreated", "denatured")
 
+# A job id is twelve hexadecimal characters. A query string that holds
+# anything else is refused before it reaches a path.
+JOB_ID_PATTERN = re.compile(r"[0-9a-f]{12}")
+
 UPLOAD_CHUNK_BYTES = 1 << 20
 
 # A settings file holds one small JSON object; anything larger is refused
@@ -217,8 +221,13 @@ def _job_status(job_id: str) -> tuple[str, str, str | None]:
 # --- Routes: form ---
 
 
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request) -> HTMLResponse:
+@app.get("/")
+def index(request: Request, job: str | None = None) -> Response:
+    """Serves the form, or redirects to the job that the query string names.
+    The page embedding this app holds the current job in its own URL, so a
+    reload of that page arrives here and returns to the job."""
+    if job is not None and JOB_ID_PATTERN.fullmatch(job):
+        return RedirectResponse(f"/results/{job}", status_code=303)
     return templates.TemplateResponse(request, "index.html", {
         "required_options": REQUIRED_OPTIONS,
         "sections": FORM_SECTIONS,
