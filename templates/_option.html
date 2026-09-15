@@ -30,7 +30,7 @@
     <label title="{{ opt.help }}">{{ opt.label }}{% if opt.required %} (required){% endif %}
       <select name="{{ opt.field }}" {% if opt.required %}required{% endif %}>
         {% if opt.default is none %}
-          <option value="" disabled selected>select&hellip;</option>
+          <option value="" disabled selected hidden>select&hellip;</option>
         {% endif %}
         {% for choice in opt.choices %}
           <option value="{{ choice }}"

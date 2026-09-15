@@ -7,6 +7,10 @@
     Upload a FASTA reference and sequencing reads from a MaP-seq experiment
     to compute normalized reactivity profiles.
   </p>
+  <div class="row-actions">
+    <button type="submit" form="example-form-single" class="secondary">Single-reference example</button>
+    <button type="submit" form="example-form-multi" class="secondary">Multi-reference example</button>
+  </div>
 </section>
 
 <form id="run-form" method="post" action="/run" enctype="multipart/form-data">
@@ -27,16 +31,12 @@
     </div>
     <div class="row-actions">
       <button type="button" class="secondary" onclick="addConditionRow()">+ Add condition</button>
-      <button type="button" class="secondary"
-              onclick="document.getElementById('example-form-single').submit()">Run single-reference example</button>
-      <button type="button" class="secondary"
-              onclick="document.getElementById('example-form-multi').submit()">Run multi-reference example</button>
     </div>
   </fieldset>
 
   <fieldset class="card">
     <legend>Options</legend>
-    <p class="hint">Hover an option for its description. Defaults come from the installed cmuts.</p>
+    <p class="hint">Hover an option for its description.</p>
     {% if required_options %}
     <div class="grid">
       {% for opt in required_options %}{{ option_field(opt) }}{% endfor %}
