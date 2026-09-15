@@ -29,7 +29,7 @@ COPY pyproject.toml /app/pyproject.toml
 RUN pip install --no-cache-dir uv && \
     uv pip install --system --no-cache -r /app/pyproject.toml
 
-COPY app.py pipeline.py options.py report.py /app/
+COPY app.py pipeline.py options.py report.py job_description.py /app/
 COPY templates /app/templates
 COPY static /app/static
 COPY examples /app/examples

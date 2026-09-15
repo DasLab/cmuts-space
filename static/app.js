@@ -32,6 +32,139 @@ function addConditionRow() {
     });
 }
 
+// --- Submitting a job ---
+
+// Every job goes to /run as a job description in the "job" field, with the
+// uploaded files as parts that the description names by "uploads/<part>".
+// The form builds its description from its fields. A bundled example is a
+// description already, and it names its files under "examples/".
+
+function showRunStatus(message, isError) {
+  const box = document.getElementById("run-status");
+  box.textContent = message;
+  box.className = isError ? "error-msg" : "hint";
+  box.hidden = message === "";
+  if (message) box.scrollIntoView({ block: "nearest" });
+}
+
+// Disables the buttons that submit a job while one submission is in flight,
+// so a second click does not submit a second job.
+function setSubmitting(submitting) {
+  document.querySelectorAll("[data-submits-job]").forEach((button) => {
+    button.disabled = submitting;
+  });
+}
+
+function showRunError(message) {
+  showRunStatus(message, true);
+  setSubmitting(false);
+}
+
+// Posts one job and opens its results page.
+function postJob(body) {
+  showRunStatus("Submitting the job. Large files can take a while to upload.", false);
+  setSubmitting(true);
+  fetch("/run", { method: "POST", body })
+    .then((response) => response.json()
+      .catch(() => ({ detail: `The server answered with status ${response.status}.` }))
+      .then((data) => ({ response, data })))
+    .then(({ response, data }) => {
+      if (!response.ok) throw new Error(data.detail || "The server refused the job.");
+      window.location.assign(data.url);
+    })
+    .catch((error) => showRunError(error.message));
+}
+
+// A page that the browser restores from its history keeps the state it had
+// during the submission, so this clears that state.
+window.addEventListener("pageshow", (event) => {
+  if (!event.persisted || document.getElementById("run-status") === null) return;
+  showRunStatus("", false);
+  setSubmitting(false);
+});
+
+// Returns the request body for one job description and the file parts that
+// it names, given as [part, file] pairs.
+function jobBody(job, files) {
+  const body = new FormData();
+  body.append("job", JSON.stringify(job));
+  files.forEach(([part, file]) => body.append(part, file));
+  return body;
+}
+
+function runExample(name) {
+  fetch(`/examples/${name}/job.json`)
+    .then((response) => {
+      if (!response.ok) throw new Error(`There is no example named ${name}.`);
+      return response.json();
+    })
+    .then((job) => postJob(jobBody(job, [])))
+    .catch((error) => showRunError(error.message));
+}
+
+// Adds one file as a part of the request, and returns the reference that
+// the job description uses for it.
+function attachFile(files, file) {
+  const part = `file-${files.length}`;
+  files.push([part, file]);
+  return `uploads/${part}`;
+}
+
+// Returns one condition row as a condition of the job description, or null
+// if the row has no treated reads.
+function rowCondition(row, files) {
+  const condition = { name: row.querySelector('input[type="text"]').value };
+  row.querySelectorAll("input[data-role]").forEach((input) => {
+    condition[input.dataset.role] = Array.from(input.files, (file) => attachFile(files, file));
+  });
+  return condition.treated.length ? condition : null;
+}
+
+// Returns the value that one option control sends, or undefined if the
+// control leaves the option at its default. An unchecked box and an empty
+// field leave it at its default.
+function controlValue(control) {
+  if (control.type === "checkbox") {
+    if (!control.checked) return undefined;
+    return control.closest(".set-field") ? control.value : true;
+  }
+  const raw = control.value.trim();
+  if (raw === "") return undefined;
+  return control.type === "number" ? Number(raw) : raw;
+}
+
+// Returns the options table of the job description. A field is named
+// "opt.<subcommand>.<option>", and the boxes of a set option share one name.
+function formOptions(form) {
+  const table = {};
+  form.querySelectorAll('[name^="opt."]').forEach((control) => {
+    const value = controlValue(control);
+    if (value === undefined) return;
+    const [, sub, name] = control.name.split(".");
+    table[sub] = table[sub] || {};
+    if (control.closest(".set-field")) table[sub][name] = (table[sub][name] || []).concat(value);
+    else table[sub][name] = value;
+  });
+  return table;
+}
+
+// Returns the job description that the form holds, and adds the files that
+// it names to files.
+function formJob(form, files) {
+  const reference = attachFile(files, form.querySelector('input[name="fasta"]').files[0]);
+  const conditions = Array.from(form.querySelectorAll(".condition-row"))
+    .map((row) => rowCondition(row, files))
+    .filter((condition) => condition !== null);
+  return { reference, conditions, options: formOptions(form) };
+}
+
+function submitRunForm(event) {
+  event.preventDefault();
+  const files = [];
+  const job = formJob(event.currentTarget, files);
+  postJob(jobBody(job, files));
+}
+
 // Polls a running job's status and reloads the page when it settles. The
 // running page marks its log element with the job id; polling starts from
 // there, so no inline script depends on this file being loaded first.

@@ -24,9 +24,16 @@ json_field() {
     python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1" 2>/dev/null
 }
 
+# Posts the job description of one example to /run, as the page does, and
+# prints the URL of the job.
 submit() {
-    curl -sf --max-time 60 --retry 3 --retry-all-errors --retry-delay 2 \
-        -o /dev/null -w '%{redirect_url}' -X POST "$BASE/run-example/$1"
+    local url
+
+    url=$(curl -sf --max-time 60 --retry 3 --retry-all-errors --retry-delay 2 \
+        "$BASE/examples/$1/job.json" \
+        | curl -sf --max-time 60 -F "job=<-" "$BASE/run" \
+        | json_field url) || return 1
+    echo "$BASE$url"
 }
 
 status_of() {
@@ -70,7 +77,6 @@ check_example() {
     local job state
 
     job=$(submit "$1") || { echo "smoke: could not submit $1" >&2; exit 1; }
-    [ -n "$job" ] || { echo "smoke: $1 did not redirect to a job" >&2; exit 1; }
     echo "smoke: $1 -> $job"
 
     state=$(wait_until_done "$job")

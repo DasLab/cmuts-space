@@ -1,0 +1,14 @@
+{
+  "reference": "examples/multi-ref/ref.fasta",
+  "conditions": [
+    {
+      "name": "example",
+      "treated": ["examples/multi-ref/instbio-2025.fastq.gz"]
+    }
+  ],
+  "options": {
+    "align": {
+      "preset": "sr"
+    }
+  }
+}

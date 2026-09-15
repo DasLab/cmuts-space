@@ -9,7 +9,7 @@ uv venv .venv
 uv sync
 ```
 
-Each bundled example holds a `settings.json` naming the options it runs with. A dataset without one is refused, so the server never picks an option on an example's behalf.
+The form and the bundled examples submit a job the same way. They post a job description to `/run`, and `job_description.py` describes its format. A bundled example is a directory under `examples/` that holds its read files and a `job.json` description. That description names each file as `examples/<example>/<file>` and holds every option the example runs with. The page posts `job.json` unchanged, and `scripts/smoke.sh` posts it in the same way.
 
 The example FASTQ files go through Git LFS (see `.gitattributes`), so a clone needs `git lfs` installed.
 

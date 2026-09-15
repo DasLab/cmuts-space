@@ -33,10 +33,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.datastructures import FormData, UploadFile
 
+import job_description
 import options
 import pipeline
 import report
 from pipeline import (
+    CONDITION_ROLES,
     MAX_CONDITIONS,
     MAX_UPLOAD_MB,
     RESULTS_TTL_HOURS,
@@ -90,6 +92,7 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="cmuts", lifespan=_lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+app.mount("/examples", StaticFiles(directory=EXAMPLES_DIR), name="examples")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 
@@ -109,7 +112,9 @@ JOB_STATES: dict[str, JobState] = {}
 
 PROXY_CLIENT = httpx.AsyncClient(timeout=60)
 
-CONDITION_ROLES = ("treated", "untreated", "denatured")
+# The sources that a file reference in a job description can name.
+UPLOADS_SOURCE = "uploads"
+EXAMPLES_SOURCE = "examples"
 
 # A job id is twelve hexadecimal characters. A query string that holds
 # anything else is refused before it reaches a path.
@@ -137,6 +142,8 @@ def _save_upload(upload: UploadFile, dest_dir: str) -> str:
     out = os.path.join(dest_dir, os.path.basename(upload.filename))
     limit = MAX_UPLOAD_MB * 1024 * 1024
     written = 0
+    # A job description can name one file part more than once.
+    upload.file.seek(0)
     with open(out, "wb") as f:
         while chunk := upload.file.read(UPLOAD_CHUNK_BYTES):
             written += len(chunk)
@@ -149,34 +156,57 @@ def _save_upload(upload: UploadFile, dest_dir: str) -> str:
     return out
 
 
-def _condition_indices(form: FormData) -> list[int]:
-    indices = set()
-    for key in form.keys():
-        match = re.fullmatch(r"cond-(\d+)-treated", key)
-        if match:
-            indices.add(int(match.group(1)))
-    return sorted(indices)
+def _uploaded_part(form: FormData, part: str) -> UploadFile:
+    uploads = _real_uploads(form.getlist(part))
+    if not uploads:
+        raise HTTPException(400, f"The request has no file part named {part}.")
+    return uploads[0]
 
 
-def _stage_condition(form: FormData, index: int, uploads_dir: str) -> ConditionInput | None:
-    """Stages one row's uploads; None where the row has no treated reads."""
-    files: dict[str, list[str]] = {}
-    for role in CONDITION_ROLES:
-        uploads = _real_uploads(form.getlist(f"cond-{index}-{role}"))
-        if len(uploads) > 2:
-            raise HTTPException(400, f"At most two {role} files per condition "
-                                     "(a read file and its mate).")
-        names = [os.path.basename(u.filename) for u in uploads]
-        if len(set(names)) != len(names):
-            raise HTTPException(400, f"The {role} files of one condition "
-                                     "share a filename.")
-        dest = os.path.join(uploads_dir, f"cond-{index}", role)
-        files[role] = [_save_upload(u, dest) for u in uploads]
-    if not files["treated"]:
-        return None
-    name = (form.get(f"cond-{index}-name") or "").strip() or f"condition {index + 1}"
-    return ConditionInput(name=name, treated=files["treated"],
-                         untreated=files["untreated"], denatured=files["denatured"])
+def _example_path(relative: str) -> str:
+    """Returns the path of one bundled example file. Refuses a path that
+    leaves the examples directory."""
+    root = os.path.realpath(EXAMPLES_DIR)
+    path = os.path.realpath(os.path.join(root, relative))
+    if not path.startswith(root + os.sep) or not os.path.isfile(path):
+        raise HTTPException(400, f"There is no example file {relative}.")
+    return path
+
+
+def _copy_file(source: str, dest_dir: str) -> str:
+    os.makedirs(dest_dir, exist_ok=True)
+    return shutil.copy(source, os.path.join(dest_dir, os.path.basename(source)))
+
+
+def _stage_file(form: FormData, reference: str, dest_dir: str) -> str:
+    """Stages the file that one reference names into dest_dir. Returns the
+    staged path."""
+    source, _, name = reference.partition("/")
+    if source == UPLOADS_SOURCE:
+        return _save_upload(_uploaded_part(form, name), dest_dir)
+    if source == EXAMPLES_SOURCE:
+        return _copy_file(_example_path(name), dest_dir)
+    raise HTTPException(400, f"The file reference {reference} has no known source.")
+
+
+def _stage_role(form: FormData, references: list[str], dest_dir: str) -> list[str]:
+    paths = [_stage_file(form, reference, dest_dir) for reference in references]
+    if len(set(paths)) != len(paths):
+        raise HTTPException(400, "Two files of one role in one condition "
+                                 "share a filename.")
+    return paths
+
+
+def _stage_condition(form: FormData, index: int, condition: ConditionInput,
+                     uploads_dir: str) -> ConditionInput:
+    """Stages the files of one condition. Returns the condition with each
+    reference replaced by its staged path."""
+    files = {
+        role: _stage_role(form, getattr(condition, role),
+                          os.path.join(uploads_dir, f"cond-{index}", role))
+        for role in CONDITION_ROLES
+    }
+    return ConditionInput(name=condition.name, **files)
 
 
 def _write_run_settings(job_dir: str, settings: dict) -> None:
@@ -185,7 +215,7 @@ def _write_run_settings(job_dir: str, settings: dict) -> None:
 
 def _submit_job(background_tasks: BackgroundTasks, job_id: str, job_dir: str,
                 fasta_path: str, conditions: list[ConditionInput],
-                extra: dict[str, list[str]]) -> RedirectResponse:
+                extra: dict[str, list[str]]) -> JSONResponse:
     state = JobState(job_id=job_id)
     state.log(f"Submitted job {job_id} with {len(conditions)} condition(s).")
     JOB_STATES[job_id] = state
@@ -197,7 +227,7 @@ def _submit_job(background_tasks: BackgroundTasks, job_id: str, job_dir: str,
             threading.Timer(60.0, JOB_STATES.pop, args=(job_id, None)).start()
 
     background_tasks.add_task(asyncio.to_thread, _runner)
-    return RedirectResponse(f"/results/{job_id}", status_code=303)
+    return JSONResponse({"job_id": job_id, "url": f"/results/{job_id}"})
 
 
 def _job_status(job_id: str) -> tuple[str, str, str | None]:
@@ -245,33 +275,38 @@ def condition_row(request: Request, index: int) -> HTMLResponse:
 # --- Routes: submit ---
 
 
-def _stage_run_inputs(form: FormData, job_dir: str) -> tuple[str, list[ConditionInput]]:
-    """Stages the FASTA and every condition row into the job directory."""
-    fasta = _real_uploads(form.getlist("fasta"))
-    if not fasta:
-        raise HTTPException(400, "A reference FASTA is required.")
-
+def _stage_run_inputs(form: FormData, description: job_description.JobDescription,
+                      job_dir: str) -> tuple[str, list[ConditionInput]]:
+    """Stages the reference and the files of every condition into the job
+    directory."""
     uploads_dir = os.path.join(job_dir, "uploads")
-    fasta_path = _save_upload(fasta[0], uploads_dir)
-
-    conditions = [
-        staged
-        for index in _condition_indices(form)
-        if (staged := _stage_condition(form, index, uploads_dir)) is not None
-    ]
-    if not conditions:
-        raise HTTPException(400, "At least one condition with treated reads is required.")
-    if len(conditions) > MAX_CONDITIONS:
-        raise HTTPException(400, f"At most {MAX_CONDITIONS} conditions per run.")
+    fasta_path = _stage_file(form, description.reference, uploads_dir)
+    conditions = [_stage_condition(form, index, condition, uploads_dir)
+                  for index, condition in enumerate(description.conditions)]
     return fasta_path, conditions
 
 
-@app.post("/run")
-async def run(request: Request, background_tasks: BackgroundTasks):
-    form = await request.form()
-
+def _job_document(form: FormData) -> dict:
+    """Returns the parsed job description that the "job" field holds."""
+    raw = form.get("job")
+    if not isinstance(raw, str):
+        raise HTTPException(400, "The request has no job description.")
     try:
-        settings = options.run_settings(SPECS, options.form_settings(SPECS, form))
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "The job description is not valid JSON.")
+
+
+@app.post("/run", response_class=JSONResponse)
+async def run(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
+    """Submits one job. The request is a multipart form. Its "job" field holds
+    the job description, and its file parts hold the uploads that the
+    description names. The form and the bundled examples both submit here."""
+    form = await request.form()
+    document = _job_document(form)
+    try:
+        description = job_description.read_job_description(document)
+        settings = options.run_settings(SPECS, options.document_settings(SPECS, document))
     except ValueError as error:
         raise HTTPException(400, str(error))
     extra = options.all_option_args(SPECS, settings)
@@ -279,66 +314,13 @@ async def run(request: Request, background_tasks: BackgroundTasks):
     job_id = uuid.uuid4().hex[:12]
     job_dir = job_dir_for(job_id)
     try:
-        fasta_path, conditions = _stage_run_inputs(form, job_dir)
+        fasta_path, conditions = _stage_run_inputs(form, description, job_dir)
     except HTTPException:
         shutil.rmtree(job_dir, ignore_errors=True)
         raise
 
     _write_run_settings(job_dir, settings)
     return _submit_job(background_tasks, job_id, job_dir, fasta_path, conditions, extra)
-
-
-def _example_settings(src_dir: str, name: str) -> dict:
-    """The settings one bundled example runs with, read from its own file so
-    no example depends on a default the server chooses for it."""
-    path = os.path.join(src_dir, SETTINGS_FILE)
-    try:
-        with open(path) as f:
-            document = json.load(f)
-        return options.run_settings(SPECS, options.document_settings(SPECS, document))
-    except (OSError, json.JSONDecodeError, ValueError) as error:
-        raise HTTPException(500, f"Example dataset {name}: {error}")
-
-
-@app.post("/run-example/{name}")
-def run_example(name: str, background_tasks: BackgroundTasks):
-    """Submits a bundled example dataset (a subdirectory under examples/)."""
-    src_dir = os.path.join(EXAMPLES_DIR, os.path.basename(name))
-    if not os.path.isdir(src_dir):
-        raise HTTPException(404, f"Unknown example dataset: {name}")
-
-    fasta, treated, untreated = None, None, None
-    for f in sorted(os.listdir(src_dir)):
-        path = os.path.join(src_dir, f)
-        if f.endswith((".fasta", ".fa")):
-            fasta = path
-        elif "untreated" in f:
-            untreated = path
-        elif f.endswith((".fastq", ".fq", ".fastq.gz", ".fq.gz")):
-            treated = path
-    if fasta is None or treated is None:
-        raise HTTPException(500, f"Example dataset {name} is missing required files.")
-
-    settings = _example_settings(src_dir, name)
-
-    job_id = uuid.uuid4().hex[:12]
-    job_dir = job_dir_for(job_id)
-    uploads_dir = os.path.join(job_dir, "uploads")
-    os.makedirs(uploads_dir, exist_ok=True)
-
-    def stage(src: str) -> str:
-        dest = os.path.join(uploads_dir, os.path.basename(src))
-        shutil.copy(src, dest)
-        return dest
-
-    conditions = [ConditionInput(
-        name="example",
-        treated=[stage(treated)],
-        untreated=[stage(untreated)] if untreated else [],
-    )]
-    _write_run_settings(job_dir, settings)
-    extra = options.all_option_args(SPECS, settings)
-    return _submit_job(background_tasks, job_id, job_dir, stage(fasta), conditions, extra)
 
 
 # --- Routes: settings ---

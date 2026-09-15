@@ -1,0 +1,30 @@
+{
+  "reference": "examples/single-ref/ref.fasta",
+  "conditions": [
+    {
+      "name": "hepes-2A3",
+      "treated": ["examples/single-ref/hepes-2A3.fastq.gz"],
+      "untreated": ["examples/single-ref/hepes-DMSO.fastq.gz"]
+    },
+    {
+      "name": "hepes-DMS",
+      "treated": ["examples/single-ref/hepes-DMS.fastq.gz"],
+      "untreated": ["examples/single-ref/hepes-ETH.fastq.gz"]
+    },
+    {
+      "name": "bicine-2A3",
+      "treated": ["examples/single-ref/bicine-2A3.fastq.gz"],
+      "untreated": ["examples/single-ref/bicine-DMSO.fastq.gz"]
+    },
+    {
+      "name": "bicine-DMS",
+      "treated": ["examples/single-ref/bicine-DMS.fastq.gz"],
+      "untreated": ["examples/single-ref/bicine-ETH.fastq.gz"]
+    }
+  ],
+  "options": {
+    "align": {
+      "preset": "map-ont"
+    }
+  }
+}

@@ -3,9 +3,10 @@ arguments from --dump-options.
 
 Each cmuts subcommand describes its arguments as JSON via the hidden
 --dump-options flag. This module runs those dumps once, keeps the options a
-user may tune, and turns a form submission or a settings file into the
-settings of one run. The command line and the saved settings file are two
-renderings of that one mapping, so they cannot disagree. Nothing here names
+user may tune, and turns the options table of a job description or a
+settings file into the settings of one run. The command line and the saved
+settings file are two renderings of that one mapping, so they cannot
+disagree. Nothing here names
 an individual option, so the form and the binary cannot drift apart.
 """
 
@@ -145,49 +146,6 @@ def option_place(sub: str, name: str) -> str:
     return f"{sub}.{name}"
 
 
-def parse_number(option: dict, raw: str, where: str):
-    kind = int if option["type"] in INTEGER_TYPES else float
-    try:
-        return kind(raw)
-    except ValueError as error:
-        raise ValueError(f"{where}: {raw!r} is not a number") from error
-
-
-def provided_value(option: dict, sub: str, form):
-    """The value a form submission provides for one option, or None where it
-    leaves the option alone."""
-    field = field_name(sub, option["name"])
-    widget = widget_of(option)
-
-    if widget == "flag":
-        # A flag can only be set on the command line, so an unchecked box
-        # provides nothing and the option keeps its default.
-        return True if form.get(field) is not None else None
-
-    if widget == "set":
-        return [c for c in option["choices"] if c in form.getlist(field)] or None
-
-    raw = (form.get(field) or "").strip()
-    if not raw:
-        return None
-    if widget == "select":
-        return raw
-    return parse_number(option, raw, option_place(sub, option["name"]))
-
-
-def form_settings(specs: dict[str, dict], form) -> dict:
-    """The values a form submission provides, by subcommand. An option the
-    form leaves alone is absent, as it is in a settings file."""
-    return {
-        sub: {
-            option["name"]: value
-            for option in exposed_options(spec)
-            if (value := provided_value(option, sub, form)) is not None
-        }
-        for sub, spec in specs.items()
-    }
-
-
 # --- The settings of one run ---
 
 
@@ -292,6 +250,8 @@ def checked_choice(option: dict, value, where: str) -> str:
 def checked_number(option: dict, value, where: str):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{where}: expected a number")
+    if option["type"] in INTEGER_TYPES and not isinstance(value, int):
+        raise ValueError(f"{where}: expected a whole number")
     if option["minimum"] is not None and value < option["minimum"]:
         raise ValueError(f"{where}: {value} is below {option['minimum']}")
     if option["maximum"] is not None and value > option["maximum"]:

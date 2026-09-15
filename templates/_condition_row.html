@@ -8,17 +8,17 @@
   <div class="condition-files">
     <label class="file-pick">
       <span>Treated reads (required)</span>
-      <input type="file" name="cond-{{ index }}-treated" multiple
+      <input type="file" name="cond-{{ index }}-treated" data-role="treated" multiple
              accept=".fastq,.fq,.gz,.bam">
     </label>
     <label class="file-pick">
       <span>Untreated background (optional)</span>
-      <input type="file" name="cond-{{ index }}-untreated" multiple
+      <input type="file" name="cond-{{ index }}-untreated" data-role="untreated" multiple
              accept=".fastq,.fq,.gz,.bam">
     </label>
     <label class="file-pick">
       <span>Denatured control (optional)</span>
-      <input type="file" name="cond-{{ index }}-denatured" multiple
+      <input type="file" name="cond-{{ index }}-denatured" data-role="denatured" multiple
              accept=".fastq,.fq,.gz,.bam">
     </label>
   </div>

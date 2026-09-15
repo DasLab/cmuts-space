@@ -88,9 +88,14 @@ SERVER_ARGS = {
 }
 
 
+# The roles a read file can play within one condition.
+CONDITION_ROLES = ("treated", "untreated", "denatured")
+
+
 @dataclass
 class ConditionInput:
-    """One condition: a display name and the staged read files per role."""
+    """One condition: a display name and the read files per role. The app
+    stages the files before the pipeline reads them."""
 
     name: str
     treated: list[str]
