@@ -45,11 +45,12 @@
         <a class="button" href="/results/{{ job_id }}/download/{{ condition.tag }}.h5">{{ condition.name }}.h5</a>
         <a class="button" href="/results/{{ job_id }}/download/{{ condition.tag }}.csv">{{ condition.name }}.csv</a>
       {% endfor %}
+      <button type="button" class="button" data-job="{{ job_id }}" onclick="downloadReport(event)">Report.html</button>
       <a class="button primary" href="/results/{{ job_id }}/download/all">Download all</a>
     </div>
   </section>
 
-  <iframe class="report-frame" src="/results/{{ job_id }}/report/" title="cmuts report"></iframe>
+  <iframe id="report-frame" class="report-frame" src="/results/{{ job_id }}/report/" title="cmuts report"></iframe>
 
   <details class="card">
     <summary><h2 style="display:inline">Log</h2></summary>
