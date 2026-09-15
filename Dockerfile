@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g-dev \
     minimap2 \
     samtools \
-    fastp \
+    vsearch \
     && rm -rf /var/lib/apt/lists/*
 
 # Build and install cmuts at a pinned commit. The "Pin space to this commit"
