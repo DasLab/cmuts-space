@@ -10,7 +10,7 @@
     <h1>Result not found</h1>
     <p>This job ID is unknown, or the results have expired
        (kept for {{ ttl_hours }} hours).</p>
-    <p><a href="/">Return to the form</a></p>
+    <p><a class="button" href="/">Return to the form</a></p>
   </section>
 
 {% elif status == "running" %}
@@ -31,7 +31,7 @@
       <summary>Log</summary>
       <pre class="log">{{ log }}</pre>
     </details>
-    <p><a href="/">Return to the form</a></p>
+    <p><a class="button" href="/">Return to the form</a></p>
   </section>
 
 {% else %}
