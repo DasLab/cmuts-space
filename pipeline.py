@@ -1,9 +1,5 @@
 """Runs one job's pipeline as cmuts subprocess calls.
 
-Framework-agnostic. Takes staged input paths plus the per-subcommand extra
-arguments the option layer built, and writes everything for one job into a
-single directory under RESULTS_DIR.
-
 On-disk job layout::
 
     {job_dir}/
@@ -134,7 +130,7 @@ def write_settings(job_dir: str, settings: dict) -> None:
 
 
 def read_meta(job_dir: str) -> dict | None:
-    """The job's metadata, or None where it is missing or unreadable."""
+    """Returns the job's metadata, or None if it is missing or unreadable."""
     path = os.path.join(job_dir, "meta.json")
     try:
         with open(path) as f:
@@ -177,7 +173,8 @@ def start_cleaner() -> None:
 
 
 def safe_name(raw: str | None, fallback: str = "condition") -> str:
-    """A filesystem-safe name for output files and HDF5 labels."""
+    """Returns a name that is safe to use in a file name and as an HDF5
+    label."""
     name = re.sub(r"[^\w\-]", "_", (raw or "").strip())
     return name or fallback
 
@@ -186,8 +183,8 @@ def safe_name(raw: str | None, fallback: str = "condition") -> str:
 
 
 def make_runner(state: JobState, cwd: str):
-    """A run(cmd) closure that logs the command and its output, and raises
-    on failure or timeout."""
+    """Returns a run(cmd) function that logs the command and its output, and
+    raises if the command fails or times out."""
 
     def run(cmd: list[str], stdout_path: str | None = None) -> None:
         state.log("$ " + " ".join(cmd))
@@ -250,8 +247,8 @@ def write_csv(run, fasta: str, h5: str, csv_path: str) -> None:
 
 def sample_rates(run, fasta: str, reads: list[str], tag: str,
                  workdir: str, extra: dict[str, list[str]]) -> str:
-    """Aligns one sample's reads and counts its mutations; returns the rates
-    HDF5."""
+    """Aligns one sample's reads and counts its mutations. Returns the path of
+    the rates file."""
     bam = os.path.join(workdir, f"{tag}.bam")
     h5 = os.path.join(workdir, f"{tag}.h5")
     align_reads(run, fasta, reads, bam, extra["align"])
@@ -261,8 +258,9 @@ def sample_rates(run, fasta: str, reads: list[str], tag: str,
 
 def condition_rates(run, fasta: str, condition: ConditionInput, tag: str,
                     workdir: str, extra: dict[str, list[str]]) -> str:
-    """One condition's pre-normalization rates: treated, less the untreated
-    background, over the denatured control, as far as the inputs go."""
+    """Returns the rates of one condition before normalization: the treated
+    sample, less the untreated background, divided by the denatured control.
+    Each step runs only where the condition has those reads."""
     rates = sample_rates(run, fasta, condition.treated, f"{tag}-treated",
                          workdir, extra)
     if condition.untreated:
@@ -291,8 +289,9 @@ def run_pipeline(
     extra: dict[str, list[str]],
     state: JobState,
 ) -> None:
-    """Runs the full pipeline for one job. All status and logging goes
-    through state; on-disk meta and log are written at the end either way."""
+    """Runs the whole pipeline for one job. Status and logging go through
+    state. The metadata and the log are written to the job directory whether
+    the run succeeds or fails."""
     workdir = os.path.join(job_dir, "work")
     os.makedirs(workdir, exist_ok=True)
 
@@ -369,7 +368,8 @@ def mark_interrupted(state: JobState) -> None:
 
 
 def unique_tags(conditions: list[ConditionInput]) -> list[str]:
-    """A filesystem-safe tag per condition, disambiguated on clashes."""
+    """Returns one tag per condition, safe to use in a file name. Adds a
+    number where two conditions would otherwise get the same tag."""
     tags: list[str] = []
     for i, condition in enumerate(conditions):
         tag = safe_name(condition.name, f"condition_{i + 1}")

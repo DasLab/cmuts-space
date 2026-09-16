@@ -87,7 +87,6 @@ fieldset.card legend {
 }
 
 .intro { margin-bottom: 1rem; }
-.intro h1 { margin-bottom: 0.25rem; }
 
 label { display: block; margin: 0.4rem 0; }
 label.check { display: flex; align-items: center; gap: 0.4rem; }
@@ -155,6 +154,9 @@ input[type="file"]::file-selector-button:hover {
   gap: 0.5rem 1rem;
   margin-top: 0.5rem;
 }
+
+/* The wrapper of a dependent option carries no look of its own. */
+.dependent { border: 0; margin: 0; padding: 0; min-width: 0; }
 
 .set-field { margin: 0.4rem 0; }
 .set-field .set-label { display: block; }

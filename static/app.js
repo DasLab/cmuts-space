@@ -138,6 +138,7 @@ function controlValue(control) {
 function formOptions(form) {
   const table = {};
   form.querySelectorAll('[name^="opt."]').forEach((control) => {
+    if (control.matches(":disabled")) return;
     const value = controlValue(control);
     if (value === undefined) return;
     const [, sub, name] = control.name.split(".");
@@ -298,6 +299,7 @@ function applySettings(fields) {
       if (applySetting(control, fields[name])) revealControl(control);
     });
   });
+  showDependentOptions();
 }
 
 function showSettingsError(message) {
@@ -326,4 +328,32 @@ function loadSettings(input) {
       showSettingsError("");
     })
     .catch(() => showSettingsError("The settings file could not be read."));
+}
+
+
+// --- Options that depend on another option ---
+
+// Whether the option a field depends on holds one of the choices it needs.
+function dependencyMet(field) {
+  const governing = document.querySelector(`[name="${field.dataset.dependsOn}"]`);
+  if (!governing) return true;
+  return field.dataset.dependsChoices.split(",").includes(governing.value);
+}
+
+// Shows every field whose dependency is met and hides the rest. A hidden field
+// is disabled as well, so the browser leaves it out of its checks and the run
+// never carries an option cmuts would refuse.
+function showDependentOptions() {
+  document.querySelectorAll("[data-depends-on]").forEach((field) => {
+    const met = dependencyMet(field);
+    field.hidden = !met;
+    field.disabled = !met;
+  });
+}
+
+const runForm = document.getElementById("run-form");
+
+if (runForm) {
+  runForm.addEventListener("change", showDependentOptions);
+  showDependentOptions();
 }

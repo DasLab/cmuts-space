@@ -8,7 +8,7 @@
   {%- endif -%}
 {%- endmacro %}
 
-{% macro option_field(opt) %}
+{% macro option_widget(opt) %}
   {% if opt.widget == "flag" %}
     <label class="check" title="{{ opt.help }}">
       <input type="checkbox" name="{{ opt.field }}"
@@ -45,5 +45,21 @@
              {% if opt.minimum is not none %}min="{{ opt.minimum }}"{% endif %}
              {% if opt.maximum is not none %}max="{{ opt.maximum }}"{% endif %}>
     </label>
+  {% endif %}
+{% endmacro %}
+
+{# An option that depends on another is wrapped, so the script can show it only
+   while that option holds a choice it needs. The wrapper is a fieldset, which
+   disables what it holds, so a field out of its dependency is neither validated
+   nor sent even where the script does not run. #}
+{% macro option_field(opt) %}
+  {% if opt.depends_field %}
+    <fieldset class="dependent" data-depends-on="{{ opt.depends_field }}"
+              data-depends-choices="{{ opt.depends_choices|join(',') }}"
+              {% if not opt.shown %}hidden disabled{% endif %}>
+      {{ option_widget(opt) }}
+    </fieldset>
+  {% else %}
+    {{ option_widget(opt) }}
   {% endif %}
 {% endmacro %}

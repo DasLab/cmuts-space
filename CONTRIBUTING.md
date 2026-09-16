@@ -2,7 +2,7 @@
 
 ## Setting up
 
-The app needs `cmuts` (with `cmuts-plot`) on `PATH`, plus `minimap2`, `samtools`, and `vsearch` for alignment, and a Python environment holding the dependencies:
+The app needs `cmuts` (with `cmuts-plot`) on `PATH`. Alignment also needs `minimap2`, `samtools`, and `vsearch`. The Python dependencies go in a virtual environment:
 
 ```sh
 uv venv .venv
@@ -15,13 +15,11 @@ The example FASTQ files go through Git LFS (see `.gitattributes`), so a clone ne
 
 ## Running locally
 
-With a sibling cmuts checkout built at `../cmuts`:
-
 ```sh
-PATH=$PWD/../cmuts/build/release:$PATH uv run python app.py
+uv run python app.py
 ```
 
-Then open http://127.0.0.1:7860 and run the bundled examples. Results land under `/tmp/cmuts-space-results` by default. The tunable limits are the `CMUTS_*` environment variables read at the top of `pipeline.py` and `report.py`.
+This starts the server at http://127.0.0.1:7860. Results are written under `/tmp/cmuts-space-results` by default.
 
 ## Docker
 
@@ -36,10 +34,10 @@ The Dockerfile pins cmuts by commit through the `CMUTS_SHA` build argument. The 
 
 The GitHub repository ([DasLab/cmuts-space](https://github.com/DasLab/cmuts-space)) is the source of truth. Push only to GitHub.
 
-The `Sync HF Space` workflow deploys every commit on `main` to the [Hugging Face space](https://huggingface.co/spaces/daslab-stanford/cmuts). It first builds the Docker image on the runner and runs the bundled examples against it (`scripts/smoke.sh`); only on success does it push to the space, wait for the build there, and run the examples once more against the deployment. A failure at any stage fails the run and leaves the previous deployment serving. Do not push to the space directly; a direct push is overwritten by the next sync. The workflow needs a repository secret named `HF_TOKEN` holding a Hugging Face token with write access to the space.
+The `Sync HF Space` workflow deploys every commit on `main` to the [Hugging Face space](https://huggingface.co/spaces/daslab-stanford/cmuts). It first builds the Docker image on the runner and runs the bundled examples against it with `scripts/smoke.sh`. Only if that passes does it push to the space, wait for the build there, and run the examples once more against the deployment.
 
-The pin workflow in DasLab/cmuts needs a `SPACE_TOKEN` secret there: a fine-grained token with contents write access to this repository only. The current token expires on September 12, 2027, and must be refreshed then.
+The sync workflow needs a repository secret named `HF_TOKEN` holding a Hugging Face token with write access to the space. The pin workflow in DasLab/cmuts needs a `SPACE_TOKEN` secret there. That is a fine-grained token which may write the contents of this repository and nothing else. The current token expires on September 12, 2027, and must be refreshed then.
 
-The pin workflow pushes to this repository on every push to DasLab/cmuts, so always pull before editing; a stale checkout carries an out-of-date `CMUTS_SHA`.
+The pin workflow pushes to this repository on every push to DasLab/cmuts, so always pull before editing. A stale checkout carries an out-of-date `CMUTS_SHA`.
 
 The previous version of the space lives on the `v1` branch.
