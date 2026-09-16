@@ -20,7 +20,10 @@
   </div>
 </section>
 
-<form id="run-form" onsubmit="submitRunForm(event)">
+<form id="run-form" onsubmit="submitRunForm(event)"
+      data-job-files-route="{{ job_files_route }}"
+      data-edit-parameter="{{ edit_parameter }}"
+      data-job-description-file="{{ job_description_file }}">
   <fieldset class="card">
     <legend>Reference</legend>
     <label class="file-pick">

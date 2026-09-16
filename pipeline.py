@@ -7,6 +7,7 @@ On-disk job layout::
         {condition}.csv   the same output as CSV
         meta.json         status and condition names
         settings.json     every option the run used
+        job.json          the job description that loads the job into the form
         log.txt           the streaming log
         uploads/          the staged inputs (skipped by the zip download)
         work/             intermediate BAMs and rates (deleted on success)
@@ -78,6 +79,13 @@ RESULTS_DIR = _results_dir()
 # The settings one job used, written at submission and offered as a download.
 SETTINGS_FILE = "settings.json"
 
+# This file holds the job description that loads one job back into the form.
+# Each file reference in it names a staged input of the job.
+JOB_DESCRIPTION_FILE = "job.json"
+
+# This directory of a job holds its staged inputs.
+UPLOADS_DIR = "uploads"
+
 # The performance arguments the server sets on each subcommand.
 SERVER_ARGS = {
     "align": ["--threads", str(THREADS)],
@@ -128,6 +136,11 @@ def write_meta(job_dir: str, meta: dict) -> None:
 def write_settings(job_dir: str, settings: dict) -> None:
     with open(os.path.join(job_dir, SETTINGS_FILE), "w") as f:
         json.dump(settings, f, indent=2)
+
+
+def write_job_description(job_dir: str, description: dict) -> None:
+    with open(os.path.join(job_dir, JOB_DESCRIPTION_FILE), "w") as f:
+        json.dump(description, f, indent=2)
 
 
 def read_meta(job_dir: str) -> dict | None:

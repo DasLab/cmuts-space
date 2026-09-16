@@ -170,11 +170,11 @@ function jobBody(job, files) {
   return body;
 }
 
-// --- Loading a bundled example into the form ---
+// --- Loading a job description into the form ---
 
-// Fetches one file the example names and returns it as a File, which is what a
-// file input holds.
-async function exampleFile(path) {
+// Fetches one file that a job description names, and returns it as a File,
+// which is what a file input holds.
+async function describedFile(path) {
   const response = await fetch(`/${path}`);
 
   if (!response.ok) throw new Error(`${path} could not be read.`);
@@ -196,11 +196,11 @@ function setFiles(input, files) {
 async function fillFileInput(input, paths) {
   if (!paths || !paths.length) return;
 
-  setFiles(input, await Promise.all(paths.map(exampleFile)));
+  setFiles(input, await Promise.all(paths.map(describedFile)));
 }
 
-// Builds one condition row from the example, with its name and the reads of
-// each role it names.
+// Builds one condition row from a job description, with its name and the
+// reads of each role that it names.
 async function fillConditionRow(condition) {
   const row = await appendConditionRow();
 
@@ -229,19 +229,20 @@ function applyJobOptions(options) {
   applySettings(fields);
 }
 
-// Loads a bundled example into the form. The run is left for the user to
-// start, so the example shows what a run is made of.
-async function loadExample(name) {
+// Loads the job description at a URL into the form, together with the files
+// that it names. The run is left for the user to start. The messages tell the
+// user what is loading, what is missing, and what has loaded.
+async function loadJobDescription(url, messages) {
   const form = document.getElementById("run-form");
 
   closeMenus();
-  showRunStatus(`Loading the ${name} example…`, false);
+  showRunStatus(messages.loading, false);
   setSubmitting(true);
 
   try {
-    const response = await fetch(`/examples/${name}/job.json`);
+    const response = await fetch(url);
 
-    if (!response.ok) throw new Error(`There is no example named ${name}.`);
+    if (!response.ok) throw new Error(messages.missing);
 
     const job = await response.json();
 
@@ -254,10 +255,45 @@ async function loadExample(name) {
 
     applyJobOptions(job.options);
     setSubmitting(false);
-    showRunStatus("The example is loaded. Change any option, then run it.", false);
+    showRunStatus(messages.loaded, false);
   } catch (error) {
     showRunError(error.message);
   }
+}
+
+// Returns the file name of the job description of a job or an example.
+function jobDescriptionFile() {
+  return document.getElementById("run-form").dataset.jobDescriptionFile;
+}
+
+// Loads a bundled example into the form, so the example shows what a run is
+// made of.
+function loadExample(name) {
+  return loadJobDescription(`/examples/${name}/${jobDescriptionFile()}`, {
+    loading: `Loading the ${name} example…`,
+    missing: `There is no example named ${name}.`,
+    loaded: "The example is loaded. Change any option, then run it.",
+  });
+}
+
+// Loads the job that the query string names into the form, so the user can
+// change it and run it again. The form holds the name of the query parameter
+// and the route of the job files. The parameter is then removed from the URL,
+// so a reload does not replace the changes of the user.
+function loadEditedJob(form) {
+  const { editParameter, jobFilesRoute } = form.dataset;
+  const jobId = new URLSearchParams(window.location.search).get(editParameter);
+
+  if (!jobId) return;
+
+  window.history.replaceState(null, "", window.location.pathname);
+  const url = `/${jobFilesRoute}/${encodeURIComponent(jobId)}/${jobDescriptionFile()}`;
+
+  loadJobDescription(url, {
+    loading: `Loading job ${jobId}…`,
+    missing: `The inputs of job ${jobId} are no longer available.`,
+    loaded: `Job ${jobId} is loaded. Change any option, then run it again.`,
+  });
 }
 
 // Adds one file as a part of the request, and returns the reference that
@@ -547,6 +583,8 @@ if (runForm) {
   runForm.addEventListener("change", refreshRunButton);
   runForm.addEventListener("input", refreshRunButton);
   refreshRunButton();
+
+  loadEditedJob(runForm);
 }
 
 

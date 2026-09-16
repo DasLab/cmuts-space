@@ -39,10 +39,12 @@ import pipeline
 import report
 from pipeline import (
     CONDITION_ROLES,
+    JOB_DESCRIPTION_FILE,
     MAX_CONDITIONS,
     MAX_UPLOAD_MB,
     RESULTS_TTL_HOURS,
     SETTINGS_FILE,
+    UPLOADS_DIR,
     ConditionInput,
     JobState,
     job_dir_for,
@@ -115,6 +117,18 @@ PROXY_CLIENT = httpx.AsyncClient(timeout=60)
 # The sources that a file reference in a job description can name.
 UPLOADS_SOURCE = "uploads"
 EXAMPLES_SOURCE = "examples"
+
+# This route serves the job description and the staged inputs of a job. The
+# form fetches the files of a job through it, as it fetches the files of an
+# example.
+JOB_FILES_ROUTE = "jobs"
+
+# This query parameter of the form page names a job to load into the form.
+EDIT_PARAMETER = "edit"
+
+templates.env.globals["job_files_route"] = JOB_FILES_ROUTE
+templates.env.globals["edit_parameter"] = EDIT_PARAMETER
+templates.env.globals["job_description_file"] = JOB_DESCRIPTION_FILE
 
 # A job id is twelve hexadecimal characters. A query string that holds
 # anything else is refused before it reaches a path.
@@ -209,6 +223,32 @@ def _stage_condition(form: FormData, index: int, condition: ConditionInput,
     return ConditionInput(name=condition.name, **files)
 
 
+def _job_file_reference(job_id: str, job_dir: str, path: str) -> str:
+    """Returns the reference through which the form fetches one staged input
+    of a job."""
+    return f"{JOB_FILES_ROUTE}/{job_id}/{os.path.relpath(path, job_dir)}"
+
+
+def _saved_condition(job_id: str, job_dir: str, condition: ConditionInput) -> dict:
+    """Returns one staged condition in the format of a job description."""
+    files = {role: [_job_file_reference(job_id, job_dir, path)
+                    for path in getattr(condition, role)]
+             for role in CONDITION_ROLES}
+    return {"name": condition.name, **files}
+
+
+def _saved_job_description(job_id: str, job_dir: str, fasta_path: str,
+                           conditions: list[ConditionInput], provided: dict) -> dict:
+    """Returns the job description that loads a job back into the form. It
+    holds the staged inputs of the job and the options that the job gave."""
+    return {
+        "reference": _job_file_reference(job_id, job_dir, fasta_path),
+        "conditions": [_saved_condition(job_id, job_dir, condition)
+                       for condition in conditions],
+        "options": provided,
+    }
+
+
 def _write_run_settings(job_dir: str, settings: dict) -> None:
     pipeline.write_settings(job_dir, options.settings_document(SPECS, settings))
 
@@ -279,7 +319,7 @@ def _stage_run_inputs(form: FormData, description: job_description.JobDescriptio
                       job_dir: str) -> tuple[str, list[ConditionInput]]:
     """Stages the reference and the files of every condition into the job
     directory."""
-    uploads_dir = os.path.join(job_dir, "uploads")
+    uploads_dir = os.path.join(job_dir, UPLOADS_DIR)
     fasta_path = _stage_file(form, description.reference, uploads_dir)
     conditions = [_stage_condition(form, index, condition, uploads_dir)
                   for index, condition in enumerate(description.conditions)]
@@ -306,7 +346,8 @@ async def run(request: Request, background_tasks: BackgroundTasks) -> JSONRespon
     document = _job_document(form)
     try:
         description = job_description.read_job_description(document)
-        settings = options.run_settings(SPECS, options.document_settings(SPECS, document))
+        provided = options.document_settings(SPECS, document)
+        settings = options.run_settings(SPECS, provided)
     except ValueError as error:
         raise HTTPException(400, str(error))
     extra = options.all_option_args(SPECS, settings)
@@ -320,6 +361,8 @@ async def run(request: Request, background_tasks: BackgroundTasks) -> JSONRespon
         raise
 
     _write_run_settings(job_dir, settings)
+    pipeline.write_job_description(job_dir, _saved_job_description(
+        job_id, job_dir, fasta_path, conditions, provided))
     return _submit_job(background_tasks, job_id, job_dir, fasta_path, conditions, extra)
 
 
@@ -451,6 +494,31 @@ def download(job_id: str, filename: str) -> FileResponse:
         raise HTTPException(404, "No such file.")
     media = "text/csv" if filename.endswith(".csv") else "application/x-hdf5"
     return FileResponse(path, media_type=media, filename=filename)
+
+
+# --- Routes: the inputs of a job ---
+
+
+def _job_input_path(job_id: str, relative: str) -> str:
+    """Returns the path of the job description or of one staged input of a
+    job. Refuses every other path, so the outputs and the log stay behind
+    their own routes."""
+    if not JOB_ID_PATTERN.fullmatch(job_id):
+        raise HTTPException(404, "Job not found.")
+    root = os.path.realpath(job_dir_for(job_id))
+    path = os.path.realpath(os.path.join(root, relative))
+    staged = path.startswith(os.path.join(root, UPLOADS_DIR) + os.sep)
+    described = path == os.path.join(root, JOB_DESCRIPTION_FILE)
+    if not (staged or described) or not os.path.isfile(path):
+        raise HTTPException(404, "No such file.")
+    return path
+
+
+@app.get(f"/{JOB_FILES_ROUTE}/{{job_id}}/{{relative:path}}")
+def job_input(job_id: str, relative: str) -> FileResponse:
+    """Serves the job description or one staged input of a job. The form
+    loads them to run the job again."""
+    return FileResponse(_job_input_path(job_id, relative))
 
 
 # --- Local dev entry point ---
