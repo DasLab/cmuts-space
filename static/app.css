@@ -246,6 +246,41 @@ button.remove-row { padding: 0.4rem 0.7rem; }
 }
 .header-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
 
+/* A button that opens the downloads of one condition below itself. The rule
+   for the sections of the form gives every details a top border and spacing,
+   which a button must not have. */
+.menu {
+  position: relative;
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+.menu > summary { list-style: none; }
+.menu > summary::-webkit-details-marker { display: none; }
+.menu[open] > summary { border-color: var(--primary); }
+
+.menu-items {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  min-width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.menu-items a {
+  padding: 0.3rem 0.6rem;
+  border-radius: var(--radius);
+  color: var(--fg);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.menu-items a:hover { background: var(--border); }
+
 .copy-url {
   display: flex;
   gap: 0.4rem;

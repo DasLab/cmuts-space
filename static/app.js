@@ -357,3 +357,14 @@ if (runForm) {
   runForm.addEventListener("change", showDependentOptions);
   showDependentOptions();
 }
+
+
+// --- The download menu of one condition ---
+
+// Closes any open menu that the click fell outside of, so only the menu being
+// used stays open.
+document.addEventListener("click", (event) => {
+  document.querySelectorAll("details.menu[open]").forEach((menu) => {
+    if (!menu.contains(event.target)) menu.open = false;
+  });
+});
