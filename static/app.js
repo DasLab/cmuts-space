@@ -19,25 +19,39 @@ function writeJobIntoParentUrl(jobId) {
 const jobMarker = document.getElementById("job-marker");
 writeJobIntoParentUrl(jobMarker ? jobMarker.dataset.job : "");
 
-// Adds one condition row, fetched from the server with a fresh index so
-// each row's fields stay distinct.
+// Every row takes a fresh index, so its fields are named apart from the rest.
 let conditionIndex = 0;
 
-function addConditionRow() {
+// Adds one empty condition row and returns it once the server has answered.
+function appendConditionRow() {
   conditionIndex += 1;
-  fetch(`/condition-row?index=${conditionIndex}`)
-    .then((r) => r.text())
+
+  return fetch(`/condition-row?index=${conditionIndex}`)
+    .then((response) => response.text())
     .then((html) => {
-      document.getElementById("conditions").insertAdjacentHTML("beforeend", html);
+      const holder = document.createElement("template");
+
+      holder.innerHTML = html.trim();
+
+      const row = holder.content.firstElementChild;
+
+      document.getElementById("conditions").append(row);
+      refreshRunButton();
+
+      return row;
     });
+}
+
+function removeConditionRow(button) {
+  button.closest(".condition-row").remove();
+  refreshRunButton();
 }
 
 // --- Submitting a job ---
 
 // Every job goes to /run as a job description in the "job" field, with the
 // uploaded files as parts that the description names by "uploads/<part>".
-// The form builds its description from its fields. A bundled example is a
-// description already, and it names its files under "examples/".
+// The form builds that description from its fields.
 
 function showRunStatus(message, isError) {
   const box = document.getElementById("run-status");
@@ -48,11 +62,75 @@ function showRunStatus(message, isError) {
 }
 
 // Disables the buttons that submit a job while one submission is in flight,
-// so a second click does not submit a second job.
+// so a second click does not submit a second job. A form that is not ready to
+// run keeps its own button disabled afterwards.
 function setSubmitting(submitting) {
   document.querySelectorAll("[data-submits-job]").forEach((button) => {
     button.disabled = submitting;
   });
+
+  if (!submitting) refreshRunButton();
+}
+
+// Returns the name a message gives one control, taken from the label holding
+// it.
+function controlName(control) {
+  const label = control.closest("label");
+  const text = label && label.childNodes[0] ? label.childNodes[0].textContent : "";
+
+  return text.replace("(required)", "").trim().toLowerCase() || control.name;
+}
+
+// Joins names as a sentence: "a and b", or "a, b and c".
+function sentenceList(names) {
+  if (names.length < 2) return names.join("");
+
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+// Names everything a run still needs, in the order the form asks for it: the
+// reference, a name and treated reads for every condition on the page, and a
+// value for every required option.
+function missingForRun(form) {
+  const fasta = form.querySelector('input[name="fasta"]');
+  const rows = Array.from(form.querySelectorAll(".condition-row"));
+  const missing = [];
+
+  if (!fasta || !fasta.files.length) missing.push("a reference FASTA");
+
+  if (!rows.length) missing.push("at least one condition");
+
+  if (!rows.every(rowHasName)) missing.push("a name for every condition");
+
+  if (!rows.every(rowHasTreated)) missing.push("treated reads in every condition");
+
+  /* The conditions have checks of their own, which name a whole row rather
+     than one of its fields. */
+  form.querySelectorAll("[required]:invalid").forEach((control) => {
+    if (control !== fasta && !control.closest(".condition-row")) {
+      missing.push(controlName(control));
+    }
+  });
+
+  return missing;
+}
+
+// Disables the run button until the form is ready. The tooltip of the wrapper
+// names what is missing, and shows while the button is disabled.
+function refreshRunButton() {
+  const form = document.getElementById("run-form");
+
+  if (!form) return;
+
+  const button = form.querySelector('button[type="submit"]');
+  const wrapper = button && button.closest(".submit-wrap");
+  const missing = missingForRun(form);
+
+  if (button) button.disabled = missing.length > 0;
+
+  if (wrapper) {
+    wrapper.title = missing.length ? `The run needs ${sentenceList(missing)}.` : "";
+  }
 }
 
 function showRunError(message) {
@@ -92,14 +170,94 @@ function jobBody(job, files) {
   return body;
 }
 
-function runExample(name) {
-  fetch(`/examples/${name}/job.json`)
-    .then((response) => {
-      if (!response.ok) throw new Error(`There is no example named ${name}.`);
-      return response.json();
-    })
-    .then((job) => postJob(jobBody(job, [])))
-    .catch((error) => showRunError(error.message));
+// --- Loading a bundled example into the form ---
+
+// Fetches one file the example names and returns it as a File, which is what a
+// file input holds.
+async function exampleFile(path) {
+  const response = await fetch(`/${path}`);
+
+  if (!response.ok) throw new Error(`${path} could not be read.`);
+
+  const name = path.split("/").pop();
+
+  return new File([await response.blob()], name);
+}
+
+// Puts files into one file input, which takes them only as a FileList.
+function setFiles(input, files) {
+  const holder = new DataTransfer();
+
+  files.forEach((file) => holder.items.add(file));
+  input.files = holder.files;
+}
+
+// Fills one input with the files at the paths given, if there are any.
+async function fillFileInput(input, paths) {
+  if (!paths || !paths.length) return;
+
+  setFiles(input, await Promise.all(paths.map(exampleFile)));
+}
+
+// Builds one condition row from the example, with its name and the reads of
+// each role it names.
+async function fillConditionRow(condition) {
+  const row = await appendConditionRow();
+
+  row.querySelector('input[type="text"]').value = condition.name || "";
+
+  for (const input of row.querySelectorAll("input[data-role]")) {
+    await fillFileInput(input, condition[input.dataset.role]);
+  }
+}
+
+// Returns the name the form gives one option, as options.field_name spells it.
+function fieldName(sub, name) {
+  return `opt.${sub}.${name}`;
+}
+
+// Writes the options of a job description into the form.
+function applyJobOptions(options) {
+  const fields = {};
+
+  Object.entries(options || {}).forEach(([sub, table]) => {
+    Object.entries(table).forEach(([name, value]) => {
+      fields[fieldName(sub, name)] = value;
+    });
+  });
+
+  applySettings(fields);
+}
+
+// Loads a bundled example into the form. The run is left for the user to
+// start, so the example shows what a run is made of.
+async function loadExample(name) {
+  const form = document.getElementById("run-form");
+
+  closeMenus();
+  showRunStatus(`Loading the ${name} example…`, false);
+  setSubmitting(true);
+
+  try {
+    const response = await fetch(`/examples/${name}/job.json`);
+
+    if (!response.ok) throw new Error(`There is no example named ${name}.`);
+
+    const job = await response.json();
+
+    form.querySelectorAll(".condition-row").forEach((row) => row.remove());
+    await fillFileInput(form.querySelector('input[name="fasta"]'), [job.reference]);
+
+    for (const condition of job.conditions) {
+      await fillConditionRow(condition);
+    }
+
+    applyJobOptions(job.options);
+    setSubmitting(false);
+    showRunStatus("The example is loaded. Change any option, then run it.", false);
+  } catch (error) {
+    showRunError(error.message);
+  }
 }
 
 // Adds one file as a part of the request, and returns the reference that
@@ -110,14 +268,24 @@ function attachFile(files, file) {
   return `uploads/${part}`;
 }
 
-// Returns one condition row as a condition of the job description, or null
-// if the row has no treated reads.
+// Whether a row carries the name every condition needs.
+function rowHasName(row) {
+  return row.querySelector('input[type="text"]').value.trim().length > 0;
+}
+
+// Whether a row holds the treated reads every condition needs.
+function rowHasTreated(row) {
+  return row.querySelector('input[data-role="treated"]').files.length > 0;
+}
+
+// Returns the condition one row describes. Every row is sent, complete or not,
+// so no condition is dropped without being reported.
 function rowCondition(row, files) {
   const condition = { name: row.querySelector('input[type="text"]').value };
   row.querySelectorAll("input[data-role]").forEach((input) => {
     condition[input.dataset.role] = Array.from(input.files, (file) => attachFile(files, file));
   });
-  return condition.treated.length ? condition : null;
+  return condition;
 }
 
 // Returns the value that one option control sends, or undefined if the
@@ -154,8 +322,7 @@ function formOptions(form) {
 function formJob(form, files) {
   const reference = attachFile(files, form.querySelector('input[name="fasta"]').files[0]);
   const conditions = Array.from(form.querySelectorAll(".condition-row"))
-    .map((row) => rowCondition(row, files))
-    .filter((condition) => condition !== null);
+    .map((row) => rowCondition(row, files));
   return { reference, conditions, options: formOptions(form) };
 }
 
@@ -300,6 +467,7 @@ function applySettings(fields) {
     });
   });
   showDependentOptions();
+  refreshRunButton();
 }
 
 function showSettingsError(message) {
@@ -356,15 +524,24 @@ const runForm = document.getElementById("run-form");
 if (runForm) {
   runForm.addEventListener("change", showDependentOptions);
   showDependentOptions();
+
+  runForm.addEventListener("change", refreshRunButton);
+  runForm.addEventListener("input", refreshRunButton);
+  refreshRunButton();
 }
 
 
 // --- The download menu of one condition ---
 
-// Closes any open menu that the click fell outside of, so only the menu being
-// used stays open.
-document.addEventListener("click", (event) => {
+// Closes every open menu, apart from the one the caller is using.
+function closeMenus(inUse) {
   document.querySelectorAll("details.menu[open]").forEach((menu) => {
-    if (!menu.contains(event.target)) menu.open = false;
+    if (menu !== inUse) menu.open = false;
   });
+}
+
+document.addEventListener("click", (event) => {
+  const clicked = event.target.closest("details.menu");
+
+  closeMenus(clicked);
 });

@@ -3,22 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{% block title %}cmuts — MaP-seq analysis{% endblock %}</title>
+  <title>{% block title %}cmuts{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
 </head>
 <body>
   <header class="site-header">
     <a href="/" class="brand">cmuts</a>
+    {# Both leave the app, so they open in a tab of their own. #}
     <nav>
-      <a href="https://github.com/DasLab/cmuts">GitHub</a>
-      <a href="https://daslab.stanford.edu/cmuts">Docs</a>
+      <a href="https://github.com/DasLab/cmuts" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://daslab.stanford.edu/cmuts" target="_blank" rel="noopener">Docs</a>
     </nav>
   </header>
   <main>
     {% block content %}{% endblock %}
   </main>
   <footer class="site-footer">
-    <span>MIT licensed</span>
+    <a href="https://github.com/DasLab/cmuts/blob/main/LICENSE" target="_blank"
+       rel="noopener"><code>cmuts</code> is MIT licensed</a>
   </footer>
   <script src="/static/app.js?v={{ asset_version }}"></script>
 </body>

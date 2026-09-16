@@ -2,13 +2,23 @@
   "reference": "examples/multi-ref/ref.fasta",
   "conditions": [
     {
-      "name": "example",
-      "treated": ["examples/multi-ref/instbio-2025.fastq.gz"]
+      "name": "ribonanza-subset-2A3",
+      "treated": ["examples/multi-ref/ribonanza-subset-2A3-treated.fastq.gz"],
+      "untreated": ["examples/multi-ref/ribonanza-subset-2A3-untreated.fastq.gz"]
+    },
+    {
+      "name": "ribonanza-subset-DMS",
+      "treated": ["examples/multi-ref/ribonanza-subset-DMS-treated.fastq.gz"],
+      "untreated": ["examples/multi-ref/ribonanza-subset-DMS-untreated.fastq.gz"]
     }
   ],
   "options": {
     "align": {
       "preset": "sr"
+    },
+    "hmm": {
+      "nan-5p": 26,
+      "nan-3p": 20
     }
   }
 }

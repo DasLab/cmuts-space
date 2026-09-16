@@ -24,8 +24,8 @@ json_field() {
     python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1" 2>/dev/null
 }
 
-# Posts the job description of one example to /run, as the page does, and
-# prints the URL of the job.
+# Posts the job description of one example to /run, unchanged, and prints the
+# URL of the job.
 submit() {
     local url
 

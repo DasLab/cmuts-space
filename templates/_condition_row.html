@@ -1,15 +1,15 @@
 <div class="condition-row">
   <div class="condition-head">
-    <input type="text" name="cond-{{ index }}-name"
-           placeholder="Condition name (e.g. 2A3)">
+    <input type="text" name="cond-{{ index }}-name" required
+           placeholder="Condition name (required)">
     <button type="button" class="remove-row"
-            onclick="this.closest('.condition-row').remove()">Remove</button>
+            onclick="removeConditionRow(this)">Remove</button>
   </div>
   <div class="condition-files">
     <label class="file-pick">
       <span>Treated reads (required)</span>
       <input type="file" name="cond-{{ index }}-treated" data-role="treated" multiple
-             accept=".fastq,.fq,.gz,.bam">
+             accept=".fastq,.fq,.gz,.bam" required>
     </label>
     <label class="file-pick">
       <span>Untreated background (optional)</span>

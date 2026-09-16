@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_option.html" import option_field %}
+{% block title %}cmuts · MaP-seq analysis{% endblock %}
 {% block content %}
 <section class="intro">
   <p>
@@ -7,8 +8,15 @@
     to compute normalized reactivity profiles.
   </p>
   <div class="row-actions">
-    <button type="button" class="secondary" data-submits-job onclick="runExample('single-ref')">Single-reference example</button>
-    <button type="button" class="secondary" data-submits-job onclick="runExample('multi-ref')">Multi-reference example</button>
+    <details class="menu">
+      <summary class="button secondary">Load example</summary>
+      <div class="menu-items">
+        <button type="button" data-submits-job
+                onclick="loadExample('single-ref')">Single-reference</button>
+        <button type="button" data-submits-job
+                onclick="loadExample('multi-ref')">Multi-reference</button>
+      </div>
+    </details>
   </div>
 </section>
 
@@ -29,7 +37,7 @@
       {% with index = 0 %}{% include "_condition_row.html" %}{% endwith %}
     </div>
     <div class="row-actions">
-      <button type="button" class="secondary" onclick="addConditionRow()">+ Add condition</button>
+      <button type="button" class="secondary" onclick="appendConditionRow()">+ Add condition</button>
     </div>
   </fieldset>
 
@@ -58,10 +66,13 @@
   </fieldset>
 
   <div class="submit-row">
-    <button type="submit" class="primary" data-submits-job>Run pipeline</button>
+    <p class="hint">Files larger than {{ max_upload_mb }} MB are rejected. Results persist for {{ ttl_hours }} hours.</p>
+    {# The tooltip sits on the wrapper, so it shows while the button is
+       disabled. #}
+    <span class="submit-wrap" title="">
+      <button type="submit" class="primary" data-submits-job>Run pipeline</button>
+    </span>
   </div>
   <p id="run-status" class="hint" hidden></p>
 </form>
-
-<p class="hint">Files larger than {{ max_upload_mb }} MB are rejected. Results persist for {{ ttl_hours }} hours.</p>
 {% endblock %}

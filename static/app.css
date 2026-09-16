@@ -12,6 +12,7 @@
   --error-bg: #2a1418;
   --error-fg: #f5808d;
   --radius: 6px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   /* The arrow repeats the --fg hex because url() cannot read a variable. */
   --select-arrow: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'><path d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%23e6e9ef' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/></svg>");
 }
@@ -39,24 +40,39 @@ main {
   padding: 0.75rem 1.25rem;
   border-bottom: 1px solid var(--border);
 }
-.site-header .brand {
-  font-weight: 700;
-  font-size: 1.1rem;
+/* The name and the links look like inline code, as in the report header. */
+.site-header .brand, .site-header nav a {
+  display: inline-block;
+  line-height: 1.5;
+  font-family: var(--mono);
+  font-size: 1rem;
+  padding: 0.12em 0.4em;
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
   text-decoration: none;
   color: var(--fg);
 }
-.site-header nav a {
-  margin-left: 1rem;
-  color: var(--muted);
-  text-decoration: none;
-}
-.site-header nav a:hover { color: var(--fg); }
+.site-header nav a { margin-left: 0.5rem; }
+.site-header .brand:hover, .site-header nav a:hover { border-color: var(--primary); }
 
 .site-footer {
   text-align: center;
   color: var(--muted);
   padding: 1rem;
   border-top: 1px solid var(--border);
+}
+.site-footer a { color: inherit; text-decoration: none; }
+.site-footer a:hover { color: var(--fg); }
+
+/* Inline code matches the header of the report. */
+code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  padding: 0.08em 0.35em;
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
 }
 
 h1, h2, h3 { line-height: 1.2; margin-top: 0; }
@@ -211,6 +227,13 @@ button:hover, .button:hover {
   background: var(--border);
   border-color: var(--primary);
 }
+button:disabled, button:disabled:hover {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--border);
+}
+.submit-wrap:not([title=""]) { cursor: not-allowed; }
+
 button.primary, .button.primary {
   background: var(--primary);
   color: var(--primary-fg);
@@ -230,11 +253,16 @@ button.remove-row { padding: 0.4rem 0.7rem; }
   flex-wrap: wrap;
 }
 
+/* The limits sit beside the button, which stays at the right on any width. */
 .submit-row {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
   margin-bottom: 1rem;
 }
+.submit-row .hint { margin: 0; }
+.submit-row .submit-wrap { margin-left: auto; }
 
 .results-header {
   display: flex;
@@ -272,14 +300,18 @@ button.remove-row { padding: 0.4rem 0.7rem; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
-.menu-items a {
+.menu-items a, .menu-items button {
   padding: 0.3rem 0.6rem;
+  border: 0;
   border-radius: var(--radius);
+  background: none;
+  font: inherit;
+  text-align: left;
   color: var(--fg);
   text-decoration: none;
   white-space: nowrap;
 }
-.menu-items a:hover { background: var(--border); }
+.menu-items a:hover, .menu-items button:hover { background: var(--border); }
 
 .copy-url {
   display: flex;
@@ -290,7 +322,7 @@ button.remove-row { padding: 0.4rem 0.7rem; }
 }
 .copy-url input {
   flex: 1;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--mono);
   font-size: 0.9rem;
   padding: 0.35rem 0.5rem;
   background: var(--bg-elev);

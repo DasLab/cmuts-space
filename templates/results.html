@@ -1,4 +1,11 @@
 {% extends "base.html" %}
+{% block title %}
+  {%- if status == "missing" -%}cmuts · Result not found
+  {%- elif status == "running" -%}cmuts · Running
+  {%- elif status == "error" -%}cmuts · Failed run
+  {%- else -%}cmuts · Reactivity report
+  {%- endif -%}
+{% endblock %}
 {% block content %}
 
 {# The job this page shows, read by the script that writes it into the URL

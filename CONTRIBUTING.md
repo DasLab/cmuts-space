@@ -9,7 +9,7 @@ uv venv .venv
 uv sync
 ```
 
-The form and the bundled examples submit a job the same way. They post a job description to `/run`, and `job_description.py` describes its format. A bundled example is a directory under `examples/` that holds its read files and a `job.json` description. That description names each file as `examples/<example>/<file>` and holds every option the example runs with. The page posts `job.json` unchanged, and `scripts/smoke.sh` posts it in the same way.
+The form and the bundled examples submit a job the same way. They post a job description to `/run`, and `job_description.py` describes its format. A bundled example is a directory under `examples/` that holds its read files and a `job.json` description. That description names each file as `examples/<example>/<file>` and holds every option the example runs with. The page loads that description into the form and uploads the files it names, so a user can change anything before running it. `scripts/smoke.sh` posts the description unchanged.
 
 The example FASTQ files go through Git LFS (see `.gitattributes`), so a clone needs `git lfs` installed.
 
