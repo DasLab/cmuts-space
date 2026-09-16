@@ -356,4 +356,4 @@ pre.log {
 
 .error { border-color: var(--error-fg); background: var(--error-bg); }
 .error h1 { color: var(--error-fg); }
-.error-msg { color: var(--error-fg); font-weight: 600; }
+.error-msg { color: var(--error-fg); font-weight: 600; white-space: pre-line; }

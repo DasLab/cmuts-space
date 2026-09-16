@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -182,11 +183,34 @@ def safe_name(raw: str | None, fallback: str = "condition") -> str:
 # --- Subprocess steps ---
 
 
-def make_runner(state: JobState, cwd: str):
-    """Returns a run(cmd) function that logs the command and its output, and
-    raises if the command fails or times out."""
+class StepFailed(RuntimeError):
+    """Signals that one step of the pipeline failed. The message is written
+    for the user, and names the step and the reason."""
 
-    def run(cmd: list[str], stdout_path: str | None = None) -> None:
+
+def cmuts_errors(cmd: list[str], stderr: str) -> list[str]:
+    """Returns the lines of the error output that the cmuts subcommand wrote
+    itself. Each of these lines starts with the name of the subcommand."""
+    prefix = f"{cmd[0]} {cmd[1]}: "
+    return [line for line in stderr.splitlines() if line.startswith(prefix)]
+
+
+def failure_message(step: str, cmd: list[str], result) -> str:
+    """Returns the message for a step whose command exited with an error. The
+    message holds the errors that cmuts reported, or the exit code if cmuts
+    reported none."""
+    reported = cmuts_errors(cmd, result.stderr or "")
+    if not reported:
+        return f"{step} failed: {cmd[0]} {cmd[1]} exited with code {result.returncode}."
+    return "\n".join([f"{step} failed:", *reported])
+
+
+def make_runner(state: JobState, cwd: str):
+    """Returns a run(cmd, step) function that logs the command and its output.
+    The function raises StepFailed if the command fails or times out. The step
+    describes the command in words for the error message."""
+
+    def run(cmd: list[str], step: str, stdout_path: str | None = None) -> None:
         state.log("$ " + " ".join(cmd))
         out = open(stdout_path, "w") if stdout_path else subprocess.PIPE
         try:
@@ -195,8 +219,8 @@ def make_runner(state: JobState, cwd: str):
                 text=True, timeout=STEP_TIMEOUT_SEC,
             )
         except subprocess.TimeoutExpired as error:
-            raise RuntimeError(
-                f"{cmd[0]} {cmd[1]} timed out after {STEP_TIMEOUT_SEC}s"
+            raise StepFailed(
+                f"{step} did not finish within {STEP_TIMEOUT_SEC} seconds."
             ) from error
         finally:
             if stdout_path:
@@ -206,54 +230,66 @@ def make_runner(state: JobState, cwd: str):
         if result.stderr:
             state.log(result.stderr.rstrip())
         if result.returncode != 0:
-            raise RuntimeError(
-                f"{cmd[0]} {cmd[1]} failed with exit code {result.returncode}"
-            )
+            raise StepFailed(failure_message(step, cmd, result))
 
     return run
 
 
-def align_reads(run, fasta: str, reads: list[str], bam: str, extra: list[str]) -> None:
+def align_reads(run, fasta: str, reads: list[str], bam: str, extra: list[str],
+                label: str) -> None:
     run(["cmuts", "align", "-f", fasta, "-o", bam,
-         *SERVER_ARGS["align"], *extra, *reads])
+         *SERVER_ARGS["align"], *extra, *reads],
+        f"Aligning {label}")
 
 
-def count_mutations(run, fasta: str, bam: str, h5: str, extra: list[str]) -> None:
+def count_mutations(run, fasta: str, bam: str, h5: str, extra: list[str],
+                    label: str) -> None:
     run(["cmuts", "hmm", "-f", fasta, "-o", h5,
-         *SERVER_ARGS["hmm"], *extra, bam])
+         *SERVER_ARGS["hmm"], *extra, bam],
+        f"Counting the mutations in {label}")
 
 
-def subtract_background(run, treated: str, untreated: str, h5: str, extra: list[str]) -> None:
-    run(["cmuts", "sub", "-o", h5, *extra, treated, untreated])
+def subtract_background(run, treated: str, untreated: str, h5: str, extra: list[str],
+                        name: str) -> None:
+    run(["cmuts", "sub", "-o", h5, *extra, treated, untreated],
+        f"Subtracting the untreated background of {name}")
 
 
-def divide_by_control(run, rates: str, control: str, h5: str, extra: list[str]) -> None:
-    run(["cmuts", "div", "-o", h5, *extra, rates, control])
+def divide_by_control(run, rates: str, control: str, h5: str, extra: list[str],
+                      name: str) -> None:
+    run(["cmuts", "div", "-o", h5, *extra, rates, control],
+        f"Dividing {name} by its denatured control")
 
 
 def normalize_conditions(run, inputs: list[str], outputs: list[str], extra: list[str]) -> None:
     cmd = ["cmuts", "norm", *extra]
     for output in outputs:
         cmd.extend(["-o", output])
-    run([*cmd, *inputs])
+    run([*cmd, *inputs], "Normalizing the conditions")
 
 
-def write_csv(run, fasta: str, h5: str, csv_path: str) -> None:
-    run(["cmuts", "csv", "-f", fasta, h5], stdout_path=csv_path)
+def write_csv(run, fasta: str, h5: str, csv_path: str, name: str) -> None:
+    run(["cmuts", "csv", "-f", fasta, h5], f"Writing the CSV file of {name}",
+        stdout_path=csv_path)
 
 
 # --- Per-condition assembly ---
 
 
 def sample_rates(run, fasta: str, reads: list[str], tag: str,
-                 workdir: str, extra: dict[str, list[str]]) -> str:
+                 workdir: str, extra: dict[str, list[str]], label: str) -> str:
     """Aligns one sample's reads and counts its mutations. Returns the path of
-    the rates file."""
+    the rates file. The label names the reads in an error message."""
     bam = os.path.join(workdir, f"{tag}.bam")
     h5 = os.path.join(workdir, f"{tag}.h5")
-    align_reads(run, fasta, reads, bam, extra["align"])
-    count_mutations(run, fasta, bam, h5, extra["hmm"])
+    align_reads(run, fasta, reads, bam, extra["align"], label)
+    count_mutations(run, fasta, bam, h5, extra["hmm"], label)
     return h5
+
+
+def reads_label(role: str, condition: ConditionInput) -> str:
+    """Returns the words that name one role's reads of a condition."""
+    return f"the {role} reads of {condition.name}"
 
 
 def condition_rates(run, fasta: str, condition: ConditionInput, tag: str,
@@ -262,18 +298,22 @@ def condition_rates(run, fasta: str, condition: ConditionInput, tag: str,
     sample, less the untreated background, divided by the denatured control.
     Each step runs only where the condition has those reads."""
     rates = sample_rates(run, fasta, condition.treated, f"{tag}-treated",
-                         workdir, extra)
+                         workdir, extra, reads_label("treated", condition))
     if condition.untreated:
         untreated = sample_rates(run, fasta, condition.untreated,
-                                 f"{tag}-untreated", workdir, extra)
+                                 f"{tag}-untreated", workdir, extra,
+                                 reads_label("untreated", condition))
         subtracted = os.path.join(workdir, f"{tag}-subtracted.h5")
-        subtract_background(run, rates, untreated, subtracted, extra["sub"])
+        subtract_background(run, rates, untreated, subtracted, extra["sub"],
+                            condition.name)
         rates = subtracted
     if condition.denatured:
         denatured = sample_rates(run, fasta, condition.denatured,
-                                 f"{tag}-denatured", workdir, extra)
+                                 f"{tag}-denatured", workdir, extra,
+                                 reads_label("denatured", condition))
         divided = os.path.join(workdir, f"{tag}-divided.h5")
-        divide_by_control(run, rates, denatured, divided, extra["div"])
+        divide_by_control(run, rates, denatured, divided, extra["div"],
+                          condition.name)
         rates = divided
     return rates
 
@@ -311,8 +351,9 @@ def run_pipeline(
         normalize_conditions(run, rates, finals, extra["norm"])
 
         state.log("\n=== Writing CSVs ===")
-        for tag, final in zip(tags, finals):
-            write_csv(run, fasta_path, final, os.path.join(job_dir, f"{tag}.csv"))
+        for condition, tag, final in zip(conditions, tags, finals):
+            write_csv(run, fasta_path, final, os.path.join(job_dir, f"{tag}.csv"),
+                      condition.name)
 
         state.log(f"\nDone. Computed profiles for {len(conditions)} condition(s).")
         write_meta(job_dir, {
@@ -327,22 +368,39 @@ def run_pipeline(
         shutil.rmtree(workdir, ignore_errors=True)
         state.status = "done"
 
-    except Exception as error:  # noqa: BLE001
-        msg = str(error) or "Unexpected error. See log for details."
-        state.log(f"Error: {msg}")
-        state.log(traceback.format_exc())
-        state.error = msg
-        state.status = "error"
-        write_meta(job_dir, {
-            "job_id": job_id,
-            "status": "error",
-            "error": msg,
-            "created_at": time.time(),
-        })
-        write_log(job_dir, state.log_lines)
+    except StepFailed as error:
+        record_failure(state, job_dir, str(error))
+    except Exception:  # noqa: BLE001
+        report_server_error(job_id)
+        record_failure(state, job_dir, UNEXPECTED_ERROR)
 
+
+# The results page shows this message when the server fails for a reason other
+# than a pipeline step. The details go only to the server log.
+UNEXPECTED_ERROR = "The server had an unexpected error. Please try again."
 
 INTERRUPTED_ERROR = "The server restarted during this job; please resubmit."
+
+
+def report_server_error(job_id: str) -> None:
+    """Writes the traceback of the current exception to the server log."""
+    print(f"cmuts: job {job_id} failed with a server error", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
+
+
+def record_failure(state: JobState, job_dir: str, message: str) -> None:
+    """Marks a job as failed, and writes the message to its log, its state
+    and its metadata."""
+    state.log(f"Error: {message}")
+    state.error = message
+    state.status = "error"
+    write_meta(job_dir, {
+        "job_id": state.job_id,
+        "status": "error",
+        "error": message,
+        "created_at": time.time(),
+    })
+    write_log(job_dir, state.log_lines)
 
 
 def mark_interrupted(state: JobState) -> None:
@@ -351,18 +409,8 @@ def mark_interrupted(state: JobState) -> None:
     handler when the container is replaced."""
     if state.status != "running":
         return
-    state.log(f"Error: {INTERRUPTED_ERROR}")
-    state.error = INTERRUPTED_ERROR
-    state.status = "error"
-    job_dir = job_dir_for(state.job_id)
     try:
-        write_meta(job_dir, {
-            "job_id": state.job_id,
-            "status": "error",
-            "error": INTERRUPTED_ERROR,
-            "created_at": time.time(),
-        })
-        write_log(job_dir, state.log_lines)
+        record_failure(state, job_dir_for(state.job_id), INTERRUPTED_ERROR)
     except OSError:
         pass
 
