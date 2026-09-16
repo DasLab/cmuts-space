@@ -82,10 +82,19 @@ def field_name(sub: str, name: str) -> str:
     return f"opt.{sub}.{name}"
 
 
+def none_choice(option: dict) -> str | None:
+    """Returns the name that selects the empty set of a set option, or None if
+    the option needs at least one choice."""
+    return option.get("none_choice")
+
+
 def default_set(option: dict) -> list[str]:
-    """Returns the choices a set option starts with."""
+    """Returns the choices a set option starts with. A default of the none
+    choice gives an empty list."""
     default = option["default"]
-    return default.split(",") if default else []
+    if not default or default == none_choice(option):
+        return []
+    return default.split(",")
 
 
 def default_value(option: dict):
@@ -145,6 +154,7 @@ def annotate(sub: str, option: dict, defaults: dict) -> dict:
     out["step"] = "1" if option["type"] in INTEGER_TYPES else "any"
     out["choice_labels"] = option.get("choice_labels") or {}
     out["default_set"] = set(default_set(option)) if out["widget"] == "set" else set()
+    out["accepts_none"] = none_choice(option) is not None
     return out
 
 
@@ -240,8 +250,14 @@ def matches_default(option: dict, value) -> bool:
     return value == default_value(option)
 
 
+def set_text(option: dict, value: list[str]) -> str:
+    """Returns the argument that one set option takes. The empty set becomes
+    the name of the none choice."""
+    return ",".join(value) if value else none_choice(option)
+
+
 def value_text(option: dict, value) -> str:
-    return ",".join(value) if widget_of(option) == "set" else str(value)
+    return set_text(option, value) if widget_of(option) == "set" else str(value)
 
 
 def option_argument(option: dict, value) -> list[str]:
@@ -297,8 +313,15 @@ def checked_flag(option: dict, value, where: str) -> bool:
 
 
 def checked_set(option: dict, value, where: str) -> list[str]:
+    """Returns the choices of one set option. A list that holds only the none
+    choice also gives the empty set. Raises ValueError for the empty set if
+    the option needs at least one choice."""
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise ValueError(f"{where}: expected a list of names")
+    if value == [none_choice(option)]:
+        value = []
+    if not value and none_choice(option) is None:
+        raise ValueError(f"{where}: choose at least one of {choice_list(option)}")
     for name in value:
         if name not in option["choices"]:
             raise ValueError(f"{where}: {name!r} is not one of {choice_list(option)}")

@@ -16,7 +16,8 @@
       {{ opt.label }}
     </label>
   {% elif opt.widget == "set" %}
-    <div class="set-field" title="{{ opt.help }}">
+    <div class="set-field" title="{{ opt.help }}"
+         {% if not opt.accepts_none %}data-needs-choice{% endif %}>
       <span class="set-label">{{ opt.label }}</span>
       {% for choice in opt.choices %}
         <label class="check">

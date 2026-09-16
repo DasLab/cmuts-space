@@ -292,27 +292,38 @@ function rowCondition(row, files) {
 // control leaves the option at its default. An unchecked box and an empty
 // field leave it at its default.
 function controlValue(control) {
-  if (control.type === "checkbox") {
-    if (!control.checked) return undefined;
-    return control.closest(".set-field") ? control.value : true;
-  }
+  if (control.type === "checkbox") return control.checked ? true : undefined;
   const raw = control.value.trim();
   if (raw === "") return undefined;
   return control.type === "number" ? Number(raw) : raw;
 }
 
-// Returns the options table of the job description. A field is named
-// "opt.<subcommand>.<option>", and the boxes of a set option share one name.
+// Returns the names of the checked boxes of one set option. The list is
+// empty when no box is checked.
+function checkedChoices(field) {
+  return Array.from(field.querySelectorAll("input:checked"), (box) => box.value);
+}
+
+// Adds one value to the options table. The field name has the form
+// "opt.<subcommand>.<option>", which gives the place of the value in the table.
+function addOption(table, fieldName, value) {
+  const [, sub, name] = fieldName.split(".");
+  table[sub] = table[sub] || {};
+  table[sub][name] = value;
+}
+
+// Returns the options table of the job description. The table always holds
+// the checked boxes of each set option, because an empty list is a valid setting.
 function formOptions(form) {
   const table = {};
   form.querySelectorAll('[name^="opt."]').forEach((control) => {
-    if (control.matches(":disabled")) return;
+    if (control.matches(":disabled") || control.closest(".set-field")) return;
     const value = controlValue(control);
-    if (value === undefined) return;
-    const [, sub, name] = control.name.split(".");
-    table[sub] = table[sub] || {};
-    if (control.closest(".set-field")) table[sub][name] = (table[sub][name] || []).concat(value);
-    else table[sub][name] = value;
+    if (value !== undefined) addOption(table, control.name, value);
+  });
+  form.querySelectorAll(".set-field").forEach((field) => {
+    const first = field.querySelector("input");
+    if (first && !first.matches(":disabled")) addOption(table, first.name, checkedChoices(field));
   });
   return table;
 }
@@ -519,9 +530,17 @@ function showDependentOptions() {
   });
 }
 
+// Checks a box again if the user unchecks the last box of a set option that
+// needs at least one choice.
+function keepOneChoice(event) {
+  const field = event.target.closest(".set-field[data-needs-choice]");
+  if (field && !field.querySelector("input:checked")) event.target.checked = true;
+}
+
 const runForm = document.getElementById("run-form");
 
 if (runForm) {
+  runForm.addEventListener("change", keepOneChoice);
   runForm.addEventListener("change", showDependentOptions);
   showDependentOptions();
 
