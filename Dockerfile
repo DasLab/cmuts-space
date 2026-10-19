@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Build and install cmuts at a pinned commit. The "Pin space to this commit"
 # workflow in DasLab/cmuts updates this line on every push to its main branch,
 # so do not pin it by hand.
-ARG CMUTS_SHA=c5ca8d01128ef81becd463a4cfc314a25e48b40b
+ARG CMUTS_SHA=af7026cb559f6295bbd439191ccd3ed80bb115f0
 RUN git clone https://github.com/DasLab/cmuts.git /cmuts && \
     cd /cmuts && git checkout $CMUTS_SHA && \
     make && make install PREFIX=/usr/local && \
